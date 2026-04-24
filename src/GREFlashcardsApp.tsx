@@ -32,6 +32,7 @@ const APP_DB_NAME = "gre-flashcards-db";
 const APP_DB_VERSION = 1;
 const APP_STATE_STORE = "app_state";
 const APP_STATE_ID = "primary";
+const FLASHCARD_UI_STATE_KEY = "gre_flashcards_flashcard_ui_v1";
 
 const DEFAULT_SESSION_STATS = {
   reviewed: 0,
@@ -190,6 +191,41 @@ function uniq(arr) {
 function formatDate(ts) {
   const d = new Date(ts);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function getStartOfLocalDay(timestamp = Date.now()) {
+  const d = new Date(timestamp);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function hashString(input) {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function seededShuffleArray(items, seedText) {
+  const arr = [...items];
+  let seed = hashString(seedText) || 1;
+
+  function random() {
+    seed += 0x6d2b79f5;
+    let t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+
+  return arr;
 }
 
 function sentimentLabel(value) {
@@ -742,7 +778,11 @@ async function loadBuiltinLibraries() {
 
   return {
     words: Array.isArray(wordsJson) ? wordsJson.map(normalizeWord) : [],
-    pairs: Array.isArray(pairsJson) ? pairsJson.map(normalizePair) : [],
+    pairs: Array.isArray(pairsJson)
+      ? pairsJson.map(normalizePair)
+      : Array.isArray(pairsJson?.sixChoicePairs)
+        ? pairsJson.sixChoicePairs.map(normalizePair)
+        : [],
   };
 }
 export default function GREFlashcardsApp() {
@@ -791,6 +831,8 @@ export default function GREFlashcardsApp() {
   uniqueWordIds: Set<string>;
   flushed: boolean;
 } | null>(null);
+
+const restoredFlashcardStateRef = useRef(false);
 
   useEffect(() => {
     trackPageView("home");
@@ -856,6 +898,35 @@ export default function GREFlashcardsApp() {
         setDailyStats(parsed.dailyStats || {});
         setTaskGoals(parsed.taskGoals || DEFAULT_TASK_GOALS);
         setDailyPlan({ ...DEFAULT_DAILY_PLAN, ...(parsed.dailyPlan || {}) });
+        try {
+  const savedFlashcardState =
+    typeof window !== "undefined"
+      ? window.localStorage.getItem(FLASHCARD_UI_STATE_KEY)
+      : null;
+
+  if (savedFlashcardState) {
+    const flashcardState = JSON.parse(savedFlashcardState);
+
+    if (flashcardState.mode) setMode(flashcardState.mode);
+    if (flashcardState.studyView) setStudyView(flashcardState.studyView);
+    if (flashcardState.flashcardMode) setFlashcardMode(flashcardState.flashcardMode);
+    if (flashcardState.flashcardFilter) setFlashcardFilter(flashcardState.flashcardFilter);
+    if (flashcardState.orderMode) setOrderMode(flashcardState.orderMode);
+    if (typeof flashcardState.search === "string") setSearch(flashcardState.search);
+    if (Number.isFinite(flashcardState.shuffleSeed)) setShuffleSeed(flashcardState.shuffleSeed);
+
+    if (Array.isArray(flashcardState.sessionOrderIds)) {
+      setSessionOrderIds(flashcardState.sessionOrderIds);
+      restoredFlashcardStateRef.current = true;
+    }
+
+    if (Number.isFinite(flashcardState.currentIndex)) {
+      setCurrentIndex(flashcardState.currentIndex);
+    }
+  }
+} catch (flashcardStateError) {
+  console.warn("Failed to restore flashcard UI state", flashcardStateError);
+}
       } else {
         const builtin = await loadBuiltinLibraries();
         if (cancelled) return;
@@ -998,35 +1069,80 @@ export default function GREFlashcardsApp() {
   const highFrequencyPairCount = useMemo(() => pairFrequencyStats.sss + pairFrequencyStats.ss + pairFrequencyStats.s, [pairFrequencyStats]);
 
 
+  const todayKey = formatDate(Date.now());
+
   const filteredWords = useMemo(() => {
     const now = Date.now();
-    const untouchedWords = words.filter((w) => w.stats.seen === 0 && (w.stats.quizCorrect || 0) === 0 && (w.stats.quizWrong || 0) === 0);
-    const todayTaskNewCount = Math.ceil((untouchedWords.length || words.length || 0) / Math.max(1, dailyPlan.wordFinishDays || 1));
+    const todayStart = getStartOfLocalDay(now);
+    const todayKeyForShuffle = formatDate(now);
+
+    const wasReviewedToday = (w) => (w.reviewState?.lastReviewedAt || 0) >= todayStart;
+    const wasWrongToday = (w) => (w.reviewState?.lastWrongAt || 0) >= todayStart;
+
+    const untouchedWords = words.filter(
+      (w) =>
+        !wasReviewedToday(w) &&
+        w.stats.seen === 0 &&
+        (w.stats.quizCorrect || 0) === 0 &&
+        (w.stats.quizWrong || 0) === 0
+    );
+
+    const eligibleReviewWords = wrongWordBook.filter((w) => {
+      const hasWrongHistory =
+        (w.stats?.unknown || 0) > 0 ||
+        (w.stats?.quizWrong || 0) > 0 ||
+        Boolean(w.reviewState?.pending);
+
+      return hasWrongHistory && !wasReviewedToday(w) && !wasWrongToday(w);
+    });
+
+    const todayTaskNewCount = Math.ceil(
+      (untouchedWords.length || words.length || 0) /
+        Math.max(1, dailyPlan.wordFinishDays || 1)
+    );
     const todayTaskReviewCount = Math.max(0, dailyPlan.wordReviewCount || 0);
-    const randomizedWrongWords = shuffleArray(wrongWordBook);
+
+    const randomizedReviewWords = seededShuffleArray(
+      eligibleReviewWords,
+      `${todayKeyForShuffle}-${shuffleSeed}`
+    );
 
     let base = [...words];
+    let keepCurrentOrder = false;
+
     if (mode === "wrong") base = wrongWordBook;
     if (mode === "stubborn") base = stubbornWordBook;
     if (mode === "favorite_words") base = words.filter((w) => w.favorite);
     if (mode === "favorite_senses") base = words.filter((w) => w.senses.some((s) => s.favorite));
     if (mode === "new") base = untouchedWords;
-    if (mode === "hard") base = words.filter((w) => w.senses.length >= 2 || (w.stats.unknown || 0) >= 2 || (w.stats.quizWrong || 0) >= 2);
+    if (mode === "hard") {
+      base = words.filter(
+        (w) =>
+          w.senses.length >= 2 ||
+          (w.stats.unknown || 0) >= 2 ||
+          (w.stats.quizWrong || 0) >= 2
+      );
+    }
 
     if (flashcardFilter === "review") {
-      base = randomizedWrongWords.slice(0, todayTaskReviewCount);
+      base = randomizedReviewWords.slice(0, todayTaskReviewCount);
+      keepCurrentOrder = true;
     }
 
     if (flashcardFilter === "task") {
-      const reviewSlice = randomizedWrongWords.slice(0, todayTaskReviewCount);
+      const reviewSlice = randomizedReviewWords.slice(0, todayTaskReviewCount);
       const reviewIds = new Set(reviewSlice.map((w) => w.id));
-      const newSlice = untouchedWords.filter((w) => !reviewIds.has(w.id)).slice(0, todayTaskNewCount);
-      const taskIds = new Set([...reviewSlice, ...newSlice].map((w) => w.id));
-      base = words.filter((w) => taskIds.has(w.id));
+      const newSlice = untouchedWords
+        .filter((w) => !reviewIds.has(w.id))
+        .slice(0, todayTaskNewCount);
+
+      base = [...reviewSlice, ...newSlice];
+      keepCurrentOrder = true;
     }
 
     if (flashcardFilter === "today_new") {
       base = untouchedWords.slice(0, todayTaskNewCount);
+      keepCurrentOrder = true;
     }
 
     if (flashcardFilter === "new") {
@@ -1035,23 +1151,47 @@ export default function GREFlashcardsApp() {
 
     const q = search.trim().toLowerCase();
     if (q) {
-      base = base.filter((w) => [
-        w.word,
-        w.shortMeaning,
-        w.memoryTip,
-        ...(w.tags || []),
-        ...w.senses.flatMap((s) => [s.zh, s.en, s.exampleZh, s.exampleEn, ...(s.synonyms || []), ...(s.antonyms || [])]),
-      ].join(" | ").toLowerCase().includes(q));
+      base = base.filter((w) =>
+        [
+          w.word,
+          w.shortMeaning,
+          w.memoryTip,
+          ...(w.tags || []),
+          ...w.senses.flatMap((s) => [
+            s.zh,
+            s.en,
+            s.exampleZh,
+            s.exampleEn,
+            ...(s.synonyms || []),
+            ...(s.antonyms || []),
+          ]),
+        ]
+          .join(" | ")
+          .toLowerCase()
+          .includes(q)
+      );
     }
 
-    return base.sort((a, b) => {
+    if (keepCurrentOrder) return base;
+
+    return [...base].sort((a, b) => {
       const pendingDelta = Number(Boolean(b.reviewState?.pending)) - Number(Boolean(a.reviewState?.pending));
       if (pendingDelta) return pendingDelta;
       const priorityDelta = (b.reviewState?.priority || 0) - (a.reviewState?.priority || 0);
       if (priorityDelta) return priorityDelta;
       return (b.reviewState?.lastWrongAt || 0) - (a.reviewState?.lastWrongAt || 0);
     });
-  }, [words, wrongWordBook, stubbornWordBook, mode, flashcardFilter, search, dailyPlan.wordFinishDays, dailyPlan.wordReviewCount, shuffleSeed]);
+  }, [
+    words,
+    wrongWordBook,
+    stubbornWordBook,
+    mode,
+    flashcardFilter,
+    search,
+    dailyPlan.wordFinishDays,
+    dailyPlan.wordReviewCount,
+    shuffleSeed,
+  ]);
 
   const filteredPairs = useMemo(() => {
     let base = sixChoicePairs;
@@ -1068,6 +1208,42 @@ export default function GREFlashcardsApp() {
 
   const filteredWordMembershipSignature = useMemo(() => [...filteredWords.map((w) => w.id)].sort().join("|"), [filteredWords]);
   const [sessionOrderIds, setSessionOrderIds] = useState([]);
+  useEffect(() => {
+  if (!storageReady) return;
+
+  try {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(
+        FLASHCARD_UI_STATE_KEY,
+        JSON.stringify({
+          currentIndex,
+          sessionOrderIds,
+          mode,
+          studyView,
+          flashcardMode,
+          flashcardFilter,
+          orderMode,
+          shuffleSeed,
+          search,
+          savedAt: Date.now(),
+        })
+      );
+    }
+  } catch (flashcardStateError) {
+    console.warn("Failed to save flashcard UI state", flashcardStateError);
+  }
+}, [
+  currentIndex,
+  sessionOrderIds,
+  mode,
+  studyView,
+  flashcardMode,
+  flashcardFilter,
+  orderMode,
+  shuffleSeed,
+  search,
+  storageReady,
+]);
 
   useEffect(() => {
     setCurrentIndex((prev) => {
@@ -1086,18 +1262,50 @@ export default function GREFlashcardsApp() {
 
   useEffect(() => {
     const ids = filteredWords.map((w) => w.id);
+
     if (!ids.length) {
       setSessionOrderIds([]);
       setCurrentIndex(0);
       return;
     }
+
+    if (restoredFlashcardStateRef.current && sessionOrderIds.length) {
+      const idSet = new Set(ids);
+      const restoredOrderStillValid =
+        sessionOrderIds.length === ids.length &&
+        sessionOrderIds.every((id) => idSet.has(id));
+
+      if (restoredOrderStillValid) {
+        setCurrentIndex((prev) =>
+          Math.min(Math.max(prev, 0), sessionOrderIds.length - 1)
+        );
+        setFlipped(false);
+        setRevealLevel(0);
+        setRetrievalInput("");
+        restoredFlashcardStateRef.current = false;
+        return;
+      }
+
+      restoredFlashcardStateRef.current = false;
+    }
+
     const nextIds = orderMode === "ordered" ? ids : shuffleArray(ids);
     setSessionOrderIds(nextIds);
     setCurrentIndex(0);
     setFlipped(false);
     setRevealLevel(0);
     setRetrievalInput("");
-  }, [filteredWordMembershipSignature, orderMode, shuffleSeed, mode, flashcardFilter, search]);
+  }, [
+    words.length,
+    orderMode,
+    shuffleSeed,
+    mode,
+    flashcardFilter,
+    search,
+    dailyPlan.wordFinishDays,
+    dailyPlan.wordReviewCount,
+    todayKey,
+  ]);
 
   const sessionOrder = useMemo(() => {
     if (!sessionOrderIds.length) return [];
@@ -1123,18 +1331,22 @@ export default function GREFlashcardsApp() {
 
   function recordDailyProgress(delta) {
     const key = formatDate(Date.now());
+
     setDailyStats((prev) => {
-      const current = prev[key] || { reviewed: 0, known: 0, unknown: 0, quizCorrect: 0, quizWrong: 0, bbPairCorrect: 0, bbPairWrong: 0 };
+      const current = prev[key] || {};
+
       return {
         ...prev,
         [key]: {
-          reviewed: current.reviewed + (delta.reviewed || 0),
-          known: current.known + (delta.known || 0),
-          unknown: current.unknown + (delta.unknown || 0),
-          quizCorrect: current.quizCorrect + (delta.quizCorrect || 0),
-          quizWrong: current.quizWrong + (delta.quizWrong || 0),
-          bbPairCorrect: current.bbPairCorrect + (delta.bbPairCorrect || 0),
-          bbPairWrong: current.bbPairWrong + (delta.bbPairWrong || 0),
+          ...current,
+          reviewed: (current.reviewed || 0) + (delta.reviewed || 0),
+          known: (current.known || 0) + (delta.known || 0),
+          unknown: (current.unknown || 0) + (delta.unknown || 0),
+          quizCorrect: (current.quizCorrect || 0) + (delta.quizCorrect || 0),
+          quizWrong: (current.quizWrong || 0) + (delta.quizWrong || 0),
+          bbPairCorrect: (current.bbPairCorrect || 0) + (delta.bbPairCorrect || 0),
+          bbPairWrong: (current.bbPairWrong || 0) + (delta.bbPairWrong || 0),
+          updatedAt: Date.now(),
         },
       };
     });
@@ -1659,8 +1871,8 @@ function recordFlashcardResult(
   const pairNewCount = sixChoicePairs.filter((pair) => (pair.stats?.seen || 0) === 0).length;
   const dailyWordNewTarget = Math.ceil((newWordCount || words.length || 0) / Math.max(1, dailyPlan.wordFinishDays || 1));
   const dailyPairNewTarget = Math.ceil((pairNewCount || sixChoicePairs.length || 0) / Math.max(1, dailyPlan.pairFinishDays || 1));
-  const todayKey = formatDate(Date.now());
-  const todayStat = dailyStats[todayKey] || {};
+  const todayStatsKey = formatDate(Date.now());
+  const todayStat = dailyStats[todayStatsKey] || {};
   const todayWordStudyCount = todayStat.reviewed || 0;
   const todayPairPracticeCount = (todayStat.bbPairCorrect || 0) + (todayStat.bbPairWrong || 0);
   const todayQuizCount = (todayStat.quizCorrect || 0) + (todayStat.quizWrong || 0);

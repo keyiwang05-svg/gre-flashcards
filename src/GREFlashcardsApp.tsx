@@ -1239,8 +1239,6 @@ const shouldRebuildDeckRef = useRef(true);
   const promptSense = displayedSenses[0] || currentWord?.senses?.[0] || null;
   const revealSteps = ["中文词义", "英义 + 核心近义词", "反义词 + 情感色彩", "相关词 + 例句"];
   const nextRevealLabel = !flipped ? revealSteps[0] : revealLevel >= 3 ? "已全部展开" : revealSteps[revealLevel + 1];
-  const progress = sessionOrder.length ? ((currentIndex + 1) / sessionOrder.length) * 100 : 0;
-  const progressLabel = sessionOrder.length ? `${progress < 1 ? progress.toFixed(1) : Math.round(progress)}%` : "0%";
 
   function updateDailyPlan(key, value) {
     const numeric = Number(value);
@@ -2020,18 +2018,11 @@ function recordFlashcardResult(
           <div className="order-1 space-y-6 lg:order-2">
             {studyView === "flashcards" ? (
               <>
-                <Card className="rounded-2xl shadow-sm">
-                  <CardContent className="p-5">
-                    <div className="mb-3 flex items-center justify-between gap-3 text-sm text-slate-600">
-                      <span>{sessionOrder.length ? "当前闪卡任务进行中" : "No cards found"}</span>
-                      <div className="flex items-center gap-2">
-                        {(mode !== "all" || flashcardFilter !== "all") ? <Button variant="outline" size="sm" className="rounded-full" onClick={() => openFlashcardDeck("all", { filter: "all" })}>返回全部闪卡</Button> : null}
-                        <span>{progressLabel}</span>
-                      </div>
-                    </div>
-                    <Progress value={progress} className="h-2" />
-                  </CardContent>
-                </Card>
+                {(mode !== "all" || flashcardFilter !== "all") ? (
+                  <div className="flex justify-end">
+                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => openFlashcardDeck("all", { filter: "all" })}>返回全部闪卡</Button>
+                  </div>
+                ) : null}
 
                 {currentWord ? (
                   <AnimatePresence mode="wait">

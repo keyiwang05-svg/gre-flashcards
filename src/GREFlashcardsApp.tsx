@@ -1250,17 +1250,21 @@ const shouldRebuildDeckRef = useRef(true);
   function recordDailyProgress(delta) {
     const key = formatDate(Date.now());
     setDailyStats((prev) => {
-      const current = prev[key] || { reviewed: 0, known: 0, unknown: 0, quizCorrect: 0, quizWrong: 0, bbPairCorrect: 0, bbPairWrong: 0 };
+      const current = prev[key] || {};
       return {
         ...prev,
         [key]: {
-          reviewed: current.reviewed + (delta.reviewed || 0),
-          known: current.known + (delta.known || 0),
-          unknown: current.unknown + (delta.unknown || 0),
-          quizCorrect: current.quizCorrect + (delta.quizCorrect || 0),
-          quizWrong: current.quizWrong + (delta.quizWrong || 0),
-          bbPairCorrect: current.bbPairCorrect + (delta.bbPairCorrect || 0),
-          bbPairWrong: current.bbPairWrong + (delta.bbPairWrong || 0),
+          ...current,
+          reviewed: (current.reviewed || 0) + (delta.reviewed || 0),
+          newReviewed: (current.newReviewed || 0) + (delta.newReviewed || 0),
+          reviewReviewed: (current.reviewReviewed || 0) + (delta.reviewReviewed || 0),
+          known: (current.known || 0) + (delta.known || 0),
+          unknown: (current.unknown || 0) + (delta.unknown || 0),
+          quizCorrect: (current.quizCorrect || 0) + (delta.quizCorrect || 0),
+          quizWrong: (current.quizWrong || 0) + (delta.quizWrong || 0),
+          bbPairCorrect: (current.bbPairCorrect || 0) + (delta.bbPairCorrect || 0),
+          bbPairWrong: (current.bbPairWrong || 0) + (delta.bbPairWrong || 0),
+          updatedAt: Date.now(),
         },
       };
     });
@@ -1437,7 +1441,14 @@ function recordFlashcardResult(
       };
     }));
 
-    const delta = { reviewed: 1, known: type === "known" ? 1 : 0, unknown: type === "unknown" ? 1 : 0 };
+    const isReviewCard = Boolean((currentWord.reviewState?.pending || (currentWord.stats?.unknown || 0) > 0 || (currentWord.stats?.quizWrong || 0) > 0) && (currentWord.reviewState?.lastWrongAt || 0) < getStartOfLocalDay(Date.now()));
+    const delta = {
+      reviewed: 1,
+      newReviewed: isReviewCard ? 0 : 1,
+      reviewReviewed: isReviewCard ? 1 : 0,
+      known: type === "known" ? 1 : 0,
+      unknown: type === "unknown" ? 1 : 0,
+    };
     setSessionStats((prev) => ({ ...prev, reviewed: prev.reviewed + 1, known: prev.known + delta.known, unknown: prev.unknown + delta.unknown }));
     recordDailyProgress(delta);
     goNext();
@@ -1790,18 +1801,28 @@ function recordFlashcardResult(
   const todayKey = formatDate(Date.now());
   const todayStat = dailyStats[todayKey] || {};
   const todayWordStudyCount = todayStat.reviewed || 0;
+  const todayNewWordStudyCount = todayStat.newReviewed || 0;
+  const todayReviewWordStudyCount = todayStat.reviewReviewed || 0;
   const todayPairPracticeCount = (todayStat.bbPairCorrect || 0) + (todayStat.bbPairWrong || 0);
   const todayQuizCount = (todayStat.quizCorrect || 0) + (todayStat.quizWrong || 0);
   const todayQuizAccuracy = todayQuizCount ? Math.round(((todayStat.quizCorrect || 0) / todayQuizCount) * 100) : null;
   const todayWordTarget = dailyWordNewTarget + dailyPlan.wordReviewCount;
+  const todayNewWordTarget = dailyWordNewTarget;
+  const todayReviewWordTarget = dailyPlan.wordReviewCount;
   const todayPairTarget = dailyPairNewTarget + dailyPlan.pairReviewCount;
   const todayWordRemaining = Math.max(0, todayWordTarget - todayWordStudyCount);
+  const todayNewWordRemaining = Math.max(0, todayNewWordTarget - todayNewWordStudyCount);
+  const todayReviewWordRemaining = Math.max(0, todayReviewWordTarget - todayReviewWordStudyCount);
   const todayPairRemaining = Math.max(0, todayPairTarget - todayPairPracticeCount);
   const todayWordProgressPct = todayWordTarget ? Math.min(100, Math.round((todayWordStudyCount / todayWordTarget) * 100)) : 0;
+  const todayNewWordProgressPct = todayNewWordTarget ? Math.min(100, Math.round((todayNewWordStudyCount / todayNewWordTarget) * 100)) : 0;
+  const todayReviewWordProgressPct = todayReviewWordTarget ? Math.min(100, Math.round((todayReviewWordStudyCount / todayReviewWordTarget) * 100)) : 100;
   const todayPairProgressPct = todayPairTarget ? Math.min(100, Math.round((todayPairPracticeCount / todayPairTarget) * 100)) : 0;
   const todayQuizProgressPct = todayQuizAccuracy === null ? 0 : Math.min(100, Math.round((todayQuizAccuracy / Math.max(1, dailyPlan.quizTarget)) * 100));
   const wrongCount = wrongWordBook.length;
   const wordPlanStatus = todayWordRemaining === 0 ? "done" : todayWordProgressPct >= 70 ? "warning" : "pending";
+  const newWordPlanStatus = todayNewWordRemaining === 0 ? "done" : todayNewWordProgressPct >= 70 ? "warning" : "pending";
+  const reviewWordPlanStatus = todayReviewWordRemaining === 0 ? "done" : todayReviewWordProgressPct >= 70 ? "warning" : "pending";
   const pairPlanStatus = todayPairRemaining === 0 ? "done" : todayPairProgressPct >= 70 ? "warning" : "pending";
   const quizPlanStatus = todayQuizAccuracy === null ? "pending" : todayQuizAccuracy >= dailyPlan.quizTarget ? "done" : todayQuizAccuracy >= Math.max(0, dailyPlan.quizTarget - 10) ? "warning" : "pending";
   const overallPlanStatus = [wordPlanStatus, pairPlanStatus, quizPlanStatus].every((status) => status === "done")
@@ -1811,6 +1832,8 @@ function recordFlashcardResult(
       : "pending";
   const overallPlanMeta = getPlanStatusMeta(overallPlanStatus);
   const wordPlanMeta = getPlanStatusMeta(wordPlanStatus);
+  const newWordPlanMeta = getPlanStatusMeta(newWordPlanStatus);
+  const reviewWordPlanMeta = getPlanStatusMeta(reviewWordPlanStatus);
   const pairPlanMeta = getPlanStatusMeta(pairPlanStatus);
   const quizPlanMeta = getPlanStatusMeta(quizPlanStatus);
   const wrongWordSummaryByDate = useMemo(() => {
@@ -2000,7 +2023,7 @@ function recordFlashcardResult(
                 <Card className="rounded-2xl shadow-sm">
                   <CardContent className="p-5">
                     <div className="mb-3 flex items-center justify-between gap-3 text-sm text-slate-600">
-                      <span>{sessionOrder.length ? `Card ${Math.min(currentIndex + 1, sessionOrder.length)} / ${sessionOrder.length}` : "No cards found"}</span>
+                      <span>{sessionOrder.length ? "当前闪卡任务进行中" : "No cards found"}</span>
                       <div className="flex items-center gap-2">
                         {(mode !== "all" || flashcardFilter !== "all") ? <Button variant="outline" size="sm" className="rounded-full" onClick={() => openFlashcardDeck("all", { filter: "all" })}>返回全部闪卡</Button> : null}
                         <span>{progressLabel}</span>
@@ -2167,11 +2190,16 @@ function recordFlashcardResult(
                     </div>
                     <Badge variant="outline" className={`rounded-full ${overallPlanMeta.badgeClass}`}>{overallPlanMeta.label}</Badge>
                   </div>
-                  <div className="grid gap-3 md:grid-cols-3">
+                  <div className="grid gap-3 md:grid-cols-4">
                     <div className="rounded-2xl bg-slate-50 p-3 space-y-2">
-                      <div className="flex items-center justify-between text-sm"><span className="font-medium text-slate-700">单词任务</span><Badge variant="outline" className={`rounded-full ${wordPlanMeta.badgeClass}`}>{wordPlanMeta.label}</Badge></div>
-                      <Progress value={todayWordProgressPct} className="h-2" />
-                      <div className="text-xs text-slate-500">{todayWordStudyCount} / {todayWordTarget}，{todayWordRemaining > 0 ? `还差 ${todayWordRemaining} 个` : "已达标"}</div>
+                      <div className="flex items-center justify-between text-sm"><span className="font-medium text-slate-700">今日新词</span><Badge variant="outline" className={`rounded-full ${newWordPlanMeta.badgeClass}`}>{newWordPlanMeta.label}</Badge></div>
+                      <Progress value={todayNewWordProgressPct} className="h-2" />
+                      <div className="text-xs text-slate-500">{todayNewWordStudyCount} / {todayNewWordTarget}，{todayNewWordRemaining > 0 ? `还差 ${todayNewWordRemaining} 个` : "已达标"}</div>
+                    </div>
+                    <div className="rounded-2xl bg-slate-50 p-3 space-y-2">
+                      <div className="flex items-center justify-between text-sm"><span className="font-medium text-slate-700">今日复习</span><Badge variant="outline" className={`rounded-full ${reviewWordPlanMeta.badgeClass}`}>{reviewWordPlanMeta.label}</Badge></div>
+                      <Progress value={todayReviewWordProgressPct} className="h-2" />
+                      <div className="text-xs text-slate-500">{todayReviewWordStudyCount} / {todayReviewWordTarget}，{todayReviewWordRemaining > 0 ? `还差 ${todayReviewWordRemaining} 个` : "已达标"}</div>
                     </div>
                     <div className="rounded-2xl bg-slate-50 p-3 space-y-2">
                       <div className="flex items-center justify-between text-sm"><span className="font-medium text-slate-700">六选二任务</span><Badge variant="outline" className={`rounded-full ${pairPlanMeta.badgeClass}`}>{pairPlanMeta.label}</Badge></div>

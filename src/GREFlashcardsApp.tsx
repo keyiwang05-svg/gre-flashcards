@@ -778,10 +778,35 @@ export default function GREFlashcardsApp() {
   const [reviewSummarySearch, setReviewSummarySearch] = useState("");
   const fileRef = useRef(null);
   const persistTimeoutRef = useRef(null);
+  const flashcardSessionRef = useRef<{
+  id: string;
+  mode: string;
+  filter: string;
+  flashcardMode: string;
+  sessionSize: number;
+  startedAt: number;
+  wordsSeen: number;
+  knownCount: number;
+  unknownCount: number;
+  uniqueWordIds: Set<string>;
+  flushed: boolean;
+} | null>(null);
 
   useEffect(() => {
     trackPageView("home");
   }, []);
+  useEffect(() => {
+  const handleBeforeUnload = () => {
+    flushFlashcardSession("page_unload");
+  };
+
+  window.addEventListener("beforeunload", handleBeforeUnload);
+
+  return () => {
+    window.removeEventListener("beforeunload", handleBeforeUnload);
+    flushFlashcardSession("component_unmount");
+  };
+}, []);
 
   useEffect(() => {
     if (studyView !== "quiz") return;
@@ -1115,13 +1140,97 @@ export default function GREFlashcardsApp() {
     });
   }
 
+  function makeFlashcardSessionId() {
+  return `fc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function flushFlashcardSession(endReason = "manual") {
+  const session = flashcardSessionRef.current;
+
+  if (!session || session.flushed || session.wordsSeen === 0) return;
+
+  session.flushed = true;
+
+  track("flashcard_session_summary", {
+    session_id: session.id,
+    mode: session.mode,
+    filter: session.filter,
+    flashcard_mode: session.flashcardMode,
+    session_size: session.sessionSize,
+    words_seen: session.wordsSeen,
+    unique_words_seen: session.uniqueWordIds.size,
+    known_count: session.knownCount,
+    unknown_count: session.unknownCount,
+    duration_sec: Math.round((Date.now() - session.startedAt) / 1000),
+    end_reason: endReason,
+  });
+
+  flashcardSessionRef.current = null;
+}
+
+function startFlashcardAnalyticsSession(args: {
+  mode: string;
+  filter: string;
+  flashcardMode: string;
+  sessionSize: number;
+}) {
+  flushFlashcardSession("new_session_started");
+
+  flashcardSessionRef.current = {
+    id: makeFlashcardSessionId(),
+    mode: args.mode,
+    filter: args.filter,
+    flashcardMode: args.flashcardMode,
+    sessionSize: args.sessionSize,
+    startedAt: Date.now(),
+    wordsSeen: 0,
+    knownCount: 0,
+    unknownCount: 0,
+    uniqueWordIds: new Set(),
+    flushed: false,
+  };
+
+  track("start_flashcard_session", {
+    mode: args.mode,
+    filter: args.filter,
+    flashcard_mode: args.flashcardMode,
+    session_size: args.sessionSize,
+  });
+}
+
+function recordFlashcardResult(
+  word: { id?: string; word?: string } | null | undefined,
+  result: "known" | "unknown"
+) {
+  const session = flashcardSessionRef.current;
+  if (!session) return;
+
+  session.wordsSeen += 1;
+
+  if (word?.id) {
+    session.uniqueWordIds.add(word.id);
+  } else if (word?.word) {
+    session.uniqueWordIds.add(word.word);
+  }
+
+  if (result === "known") {
+    session.knownCount += 1;
+  } else {
+    session.unknownCount += 1;
+  }
+
+  if (session.wordsSeen >= session.sessionSize) {
+    flushFlashcardSession("completed");
+  }
+}
+
   function openFlashcardDeck(nextMode = "all", options = {}) {
-    track("start_flashcard_session", {
-      mode: nextMode,
-      filter: options.filter || "all",
-      flashcard_mode: options.flashcardMode || "recognition",
-      session_size: filteredWords.length,
-    });
+    startFlashcardAnalyticsSession({
+  mode: nextMode,
+  filter: options.filter || "all",
+  flashcardMode: options.flashcardMode || "recognition",
+  sessionSize: filteredWords.length,
+});
     setStudyView("flashcards");
     setMode(nextMode);
     setFlashcardFilter(options.filter || "all");
@@ -1149,13 +1258,10 @@ export default function GREFlashcardsApp() {
   }
 
   function updateWordResult(type) {
-    if (!currentWord) return;
-    track(type === "known" ? "mark_word_known" : "mark_word_unknown", {
-      word: currentWord.word,
-      mode,
-      flashcard_mode: flashcardMode,
-      current_index: currentIndex,
-    });
+  if (!currentWord) return;
+
+  recordFlashcardResult(currentWord, type);
+    
     const now = Date.now();
     setWords((prev) => prev.map((w) => {
       if (w.id !== currentWord.id) return w;

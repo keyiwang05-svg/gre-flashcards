@@ -832,7 +832,7 @@ export default function GREFlashcardsApp() {
   flushed: boolean;
 } | null>(null);
 
-const restoredFlashcardStateRef = useRef(false);
+const restoredFlashcardStateRef = useRef(null);
 
   useEffect(() => {
     trackPageView("home");
@@ -916,13 +916,14 @@ const restoredFlashcardStateRef = useRef(false);
     if (Number.isFinite(flashcardState.shuffleSeed)) setShuffleSeed(flashcardState.shuffleSeed);
 
     if (Array.isArray(flashcardState.sessionOrderIds)) {
-      setSessionOrderIds(flashcardState.sessionOrderIds);
-      restoredFlashcardStateRef.current = true;
-    }
-
-    if (Number.isFinite(flashcardState.currentIndex)) {
-      setCurrentIndex(flashcardState.currentIndex);
-    }
+  restoredFlashcardStateRef.current = {
+    sessionOrderIds: flashcardState.sessionOrderIds,
+    currentIndex: Number.isFinite(flashcardState.currentIndex)
+      ? flashcardState.currentIndex
+      : 0,
+    currentWordId: flashcardState.currentWordId || null,
+  };
+}
   }
 } catch (flashcardStateError) {
   console.warn("Failed to restore flashcard UI state", flashcardStateError);
@@ -1211,12 +1212,16 @@ const restoredFlashcardStateRef = useRef(false);
   useEffect(() => {
   if (!storageReady) return;
 
+  // 刷新后第一次恢复时，不要立刻把 currentIndex=0 写回 localStorage
+  if (restoredFlashcardStateRef.current) return;
+
   try {
     if (typeof window !== "undefined") {
       window.localStorage.setItem(
         FLASHCARD_UI_STATE_KEY,
         JSON.stringify({
           currentIndex,
+          currentWordId: sessionOrderIds[currentIndex] || null,
           sessionOrderIds,
           mode,
           studyView,
@@ -1261,51 +1266,73 @@ const restoredFlashcardStateRef = useRef(false);
   }, [studyView, quizMode, filteredWords, words, filteredPairs, sixChoicePairs]);
 
   useEffect(() => {
-    const ids = filteredWords.map((w) => w.id);
+  const ids = filteredWords.map((w) => w.id);
 
-    if (!ids.length) {
-      setSessionOrderIds([]);
-      setCurrentIndex(0);
-      return;
-    }
-
-    if (restoredFlashcardStateRef.current && sessionOrderIds.length) {
-      const idSet = new Set(ids);
-      const restoredOrderStillValid =
-        sessionOrderIds.length === ids.length &&
-        sessionOrderIds.every((id) => idSet.has(id));
-
-      if (restoredOrderStillValid) {
-        setCurrentIndex((prev) =>
-          Math.min(Math.max(prev, 0), sessionOrderIds.length - 1)
-        );
-        setFlipped(false);
-        setRevealLevel(0);
-        setRetrievalInput("");
-        restoredFlashcardStateRef.current = false;
-        return;
-      }
-
-      restoredFlashcardStateRef.current = false;
-    }
-
-    const nextIds = orderMode === "ordered" ? ids : shuffleArray(ids);
-    setSessionOrderIds(nextIds);
+  if (!ids.length) {
+    setSessionOrderIds([]);
     setCurrentIndex(0);
+    restoredFlashcardStateRef.current = null;
+    return;
+  }
+
+  const restoredState = restoredFlashcardStateRef.current;
+
+  if (restoredState) {
+    const idSet = new Set(ids);
+    const restoredIds = Array.isArray(restoredState.sessionOrderIds)
+      ? restoredState.sessionOrderIds.filter((id) => idSet.has(id))
+      : [];
+
+    const missingIds = ids.filter((id) => !restoredIds.includes(id));
+    const nextIds = restoredIds.length
+      ? [...restoredIds, ...missingIds]
+      : orderMode === "ordered"
+        ? ids
+        : shuffleArray(ids);
+
+    let nextIndex = 0;
+
+    if (restoredState.currentWordId) {
+      const wordIndex = nextIds.findIndex((id) => id === restoredState.currentWordId);
+      if (wordIndex >= 0) {
+        nextIndex = wordIndex;
+      } else {
+        nextIndex = Math.min(
+          Math.max(restoredState.currentIndex || 0, 0),
+          nextIds.length - 1
+        );
+      }
+    } else {
+      nextIndex = Math.min(
+        Math.max(restoredState.currentIndex || 0, 0),
+        nextIds.length - 1
+      );
+    }
+
+    setSessionOrderIds(nextIds);
+    setCurrentIndex(nextIndex);
     setFlipped(false);
     setRevealLevel(0);
     setRetrievalInput("");
-  }, [
-    words.length,
-    orderMode,
-    shuffleSeed,
-    mode,
-    flashcardFilter,
-    search,
-    dailyPlan.wordFinishDays,
-    dailyPlan.wordReviewCount,
-    todayKey,
-  ]);
+
+    restoredFlashcardStateRef.current = null;
+    return;
+  }
+
+  const nextIds = orderMode === "ordered" ? ids : shuffleArray(ids);
+  setSessionOrderIds(nextIds);
+  setCurrentIndex(0);
+  setFlipped(false);
+  setRevealLevel(0);
+  setRetrievalInput("");
+}, [
+  filteredWordMembershipSignature,
+  orderMode,
+  shuffleSeed,
+  mode,
+  flashcardFilter,
+  search,
+]);
 
   const sessionOrder = useMemo(() => {
     if (!sessionOrderIds.length) return [];

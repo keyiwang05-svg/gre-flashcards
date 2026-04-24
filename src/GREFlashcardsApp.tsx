@@ -727,9 +727,27 @@ function buildQuizQuestion(wordPool, mode, pairPool) {
   };
 }
 
+async function loadBuiltinLibraries() {
+  const [wordsRes, pairsRes] = await Promise.all([
+    fetch("/data/builtinWords.json"),
+    fetch("/data/builtinPairs.json"),
+  ]);
+
+  if (!wordsRes.ok || !pairsRes.ok) {
+    throw new Error("Failed to load built-in libraries");
+  }
+
+  const wordsJson = await wordsRes.json();
+  const pairsJson = await pairsRes.json();
+
+  return {
+    words: Array.isArray(wordsJson) ? wordsJson.map(normalizeWord) : [],
+    pairs: Array.isArray(pairsJson) ? pairsJson.map(normalizePair) : [],
+  };
+}
 export default function GREFlashcardsApp() {
-  const [words, setWords] = useState(sampleWords.map(normalizeWord));
-  const [sixChoicePairs, setSixChoicePairs] = useState(sampleSixChoicePairs.map(normalizePair));
+  const [words, setWords] = useState([]);
+  const [sixChoicePairs, setSixChoicePairs] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [mode, setMode] = useState("all");
@@ -774,44 +792,80 @@ export default function GREFlashcardsApp() {
   }, [studyView, quizMode]);
 
   useEffect(() => {
-    let cancelled = false;
+  let cancelled = false;
 
-    async function loadSavedState() {
+  async function loadSavedState() {
+    try {
+      let parsed = null;
+
       try {
-        let parsed = null;
-        try {
-          parsed = await idbGetAppState();
-        } catch (idbError) {
-          console.warn("IndexedDB load failed, falling back to localStorage", idbError);
-        }
-
-        if (!parsed) {
-          const saved = typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null;
-          if (saved) parsed = JSON.parse(saved);
-        }
-
-        if (cancelled) return;
-        if (parsed) {
-          if (Array.isArray(parsed.words) && parsed.words.length) setWords(parsed.words.map(normalizeWord));
-          if (Array.isArray(parsed.sixChoicePairs) && parsed.sixChoicePairs.length) setSixChoicePairs(parsed.sixChoicePairs.map(normalizePair));
-          setSessionStats(parsed.sessionStats || DEFAULT_SESSION_STATS);
-          setDailyStats(parsed.dailyStats || {});
-          setTaskGoals(parsed.taskGoals || DEFAULT_TASK_GOALS);
-          setDailyPlan({ ...DEFAULT_DAILY_PLAN, ...(parsed.dailyPlan || {}) });
-        }
-      } catch (e) {
-        console.error("Failed to load saved data", e);
-        if (!cancelled) setStorageMessage(LOAD_SAVED_DATA_ERROR_MESSAGE);
-      } finally {
-        if (!cancelled) setStorageReady(true);
+        parsed = await idbGetAppState();
+      } catch (idbError) {
+        console.warn("IndexedDB load failed, falling back to localStorage", idbError);
       }
-    }
 
-    loadSavedState();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+      if (!parsed) {
+        const saved =
+          typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null;
+        if (saved) parsed = JSON.parse(saved);
+      }
+
+      if (cancelled) return;
+
+      if (parsed) {
+        if (Array.isArray(parsed.words) && parsed.words.length) {
+          setWords(parsed.words.map(normalizeWord));
+        } else {
+          const builtin = await loadBuiltinLibraries();
+          if (!cancelled) setWords(builtin.words);
+        }
+
+        if (Array.isArray(parsed.sixChoicePairs) && parsed.sixChoicePairs.length) {
+          setSixChoicePairs(parsed.sixChoicePairs.map(normalizePair));
+        } else {
+          const builtin = await loadBuiltinLibraries();
+          if (!cancelled) setSixChoicePairs(builtin.pairs);
+        }
+
+        setSessionStats(parsed.sessionStats || DEFAULT_SESSION_STATS);
+        setDailyStats(parsed.dailyStats || {});
+        setTaskGoals(parsed.taskGoals || DEFAULT_TASK_GOALS);
+        setDailyPlan({ ...DEFAULT_DAILY_PLAN, ...(parsed.dailyPlan || {}) });
+      } else {
+        const builtin = await loadBuiltinLibraries();
+        if (cancelled) return;
+
+        setWords(builtin.words);
+        setSixChoicePairs(builtin.pairs);
+      }
+    } catch (e) {
+      console.error("Failed to load saved data", e);
+
+      try {
+        const builtin = await loadBuiltinLibraries();
+        if (!cancelled) {
+          setWords(builtin.words);
+          setSixChoicePairs(builtin.pairs);
+        }
+      } catch (builtinError) {
+        console.error("Failed to load built-in libraries", builtinError);
+        if (!cancelled) {
+          setWords(sampleWords.map(normalizeWord));
+          setSixChoicePairs(sampleSixChoicePairs.map(normalizePair));
+          setStorageMessage(LOAD_SAVED_DATA_ERROR_MESSAGE);
+        }
+      }
+    } finally {
+      if (!cancelled) setStorageReady(true);
+    }
+  }
+
+  loadSavedState();
+
+  return () => {
+    cancelled = true;
+  };
+}, []);
 
   useEffect(() => {
     if (!storageReady) return;

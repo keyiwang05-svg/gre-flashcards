@@ -184,17 +184,14 @@ function splitMultiValue(value) {
     .filter(Boolean);
 }
 
+function uniq(arr) {
+  return Array.from(new Set(arr.filter(Boolean)));
+}
+
 function formatDate(ts) {
   const d = new Date(ts);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
-
-function getStartOfLocalDay(timestamp = Date.now()) {
-  const d = new Date(timestamp);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
-}
-
 
 function sentimentLabel(value) {
   if (value === "positive") return "偏褒义";
@@ -753,7 +750,6 @@ export default function GREFlashcardsApp() {
   const [words, setWords] = useState([]);
   const [sixChoicePairs, setSixChoicePairs] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [flashcardCompleteMessage, setFlashcardCompleteMessage] = useState("");
   const [flipped, setFlipped] = useState(false);
   const [mode, setMode] = useState("all");
   const [studyView, setStudyView] = useState("flashcards");
@@ -797,8 +793,7 @@ export default function GREFlashcardsApp() {
   flushed: boolean;
 } | null>(null);
 
-const restoredFlashcardStateRef = useRef(null);
-const shouldRebuildDeckRef = useRef(true);
+const restoredFlashcardStateRef = useRef(false);
 
   useEffect(() => {
     trackPageView("home");
@@ -881,19 +876,13 @@ const shouldRebuildDeckRef = useRef(true);
     if (typeof flashcardState.search === "string") setSearch(flashcardState.search);
     if (Number.isFinite(flashcardState.shuffleSeed)) setShuffleSeed(flashcardState.shuffleSeed);
 
-    if (Array.isArray(flashcardState.sessionOrderIds) && flashcardState.sessionOrderIds.length) {
-      const restoredIndex = Number.isFinite(flashcardState.currentIndex)
-        ? flashcardState.currentIndex
-        : 0;
-
+    if (Array.isArray(flashcardState.sessionOrderIds)) {
       setSessionOrderIds(flashcardState.sessionOrderIds);
-      setCurrentIndex(restoredIndex);
-      restoredFlashcardStateRef.current = {
-        sessionOrderIds: flashcardState.sessionOrderIds,
-        currentIndex: restoredIndex,
-        currentWordId: flashcardState.currentWordId || flashcardState.sessionOrderIds[restoredIndex] || null,
-      };
-      shouldRebuildDeckRef.current = false;
+      restoredFlashcardStateRef.current = true;
+    }
+
+    if (Number.isFinite(flashcardState.currentIndex)) {
+      setCurrentIndex(flashcardState.currentIndex);
     }
   }
 } catch (flashcardStateError) {
@@ -975,6 +964,25 @@ const shouldRebuildDeckRef = useRef(true);
   }, [words, sixChoicePairs, sessionStats, dailyStats, taskGoals, dailyPlan, storageReady]);
 
   const wrongWordBook = useMemo(() => words.filter((w) => (w.stats?.unknown || 0) > 0 || (w.stats?.quizWrong || 0) > 0), [words]);
+
+  const todayReviewTargetActual = useMemo(() => {
+    const todayStart = getStartOfLocalDay(Date.now());
+
+    const eligibleReviewWords = wrongWordBook.filter((w) => {
+      const lastWrongAt = w.reviewState?.lastWrongAt || 0;
+      const hasWrongHistory =
+        (w.stats?.unknown || 0) > 0 ||
+        (w.stats?.quizWrong || 0) > 0 ||
+        Boolean(w.reviewState?.pending);
+
+      return hasWrongHistory && lastWrongAt > 0 && lastWrongAt < todayStart;
+    });
+
+    return Math.min(
+      eligibleReviewWords.length,
+      Math.max(0, dailyPlan.wordReviewCount || 0)
+    );
+  }, [wrongWordBook, dailyPlan.wordReviewCount]);
   const stubbornWordBook = useMemo(() => words.filter((w) => (w.reviewState?.priority || 0) >= 4 || (w.reviewState?.wrongStreak || 0) >= 2), [words]);
   const favoriteWords = useMemo(() => words.filter((w) => w.favorite), [words]);
   const favoriteSenseCount = useMemo(() => words.reduce((sum, w) => sum + w.senses.filter((s) => s.favorite).length, 0), [words]);
@@ -1044,59 +1052,87 @@ const shouldRebuildDeckRef = useRef(true);
   const filteredWords = useMemo(() => {
     const now = Date.now();
     const todayStart = getStartOfLocalDay(now);
+    const todayKeyForShuffle = formatDate(now);
+
+    const wasReviewedToday = (w) => (w.reviewState?.lastReviewedAt || 0) >= todayStart;
+    const wasWrongToday = (w) => (w.reviewState?.lastWrongAt || 0) >= todayStart;
+
     const untouchedWords = words.filter(
       (w) =>
         w.stats.seen === 0 &&
-      (w.stats.quizCorrect || 0) === 0 &&
-      (w.stats.quizWrong || 0) === 0
-  );
-  const todayTaskNewCount = Math.ceil(
-    (untouchedWords.length || words.length || 0) /
-      Math.max(1, dailyPlan.wordFinishDays || 1)
-  );
-  const todayTaskReviewCount = Math.max(0, dailyPlan.wordReviewCount || 0);
+        (w.stats.quizCorrect || 0) === 0 &&
+        (w.stats.quizWrong || 0) === 0
+    );
 
-  const eligibleReviewWords = wrongWordBook.filter((w) => {
-    const wasWrongToday = (w.reviewState?.lastWrongAt || 0) >= todayStart;
+    const todayTaskNewCount = Math.ceil(
+      (untouchedWords.length || words.length || 0) /
+        Math.max(1, dailyPlan.wordFinishDays || 1)
+    );
+    const todayTaskReviewCount = Math.max(0, dailyPlan.wordReviewCount || 0);
 
-    const hasWrongHistory =
-      (w.stats?.unknown || 0) > 0 ||
-      (w.stats?.quizWrong || 0) > 0 ||
-      Boolean(w.reviewState?.pending);
+    const eligibleReviewWords = wrongWordBook.filter((w) => {
+      const lastWrongAt = w.reviewState?.lastWrongAt || 0;
+      const hasWrongHistory =
+        (w.stats?.unknown || 0) > 0 ||
+        (w.stats?.quizWrong || 0) > 0 ||
+        Boolean(w.reviewState?.pending);
 
-    return hasWrongHistory && !wasWrongToday;
-  });
+      // 今天新错的词进错题本，但不进入今天的复习任务。
+      // 已经在今天复习过的历史错词，也不再次进入今天的复习队列。
+      return hasWrongHistory && lastWrongAt > 0 && lastWrongAt < todayStart && !wasReviewedToday(w) && !wasWrongToday(w);
+    });
 
-  const randomizedWrongWords = shuffleArray(eligibleReviewWords);
+    const randomizedReviewWords = seededShuffleArray(
+      eligibleReviewWords,
+      `${todayKeyForShuffle}-${shuffleSeed}-review`
+    );
+
+    const randomizedNewWords = orderMode === "ordered"
+      ? untouchedWords
+      : seededShuffleArray(untouchedWords, `${todayKeyForShuffle}-${shuffleSeed}-new`);
+
     let base = [...words];
+    let keepCurrentOrder = false;
+
     if (mode === "wrong") base = wrongWordBook;
     if (mode === "stubborn") base = stubbornWordBook;
     if (mode === "favorite_words") base = words.filter((w) => w.favorite);
     if (mode === "favorite_senses") base = words.filter((w) => w.senses.some((s) => s.favorite));
-    if (mode === "new") base = untouchedWords;
-    if (mode === "hard") base = words.filter((w) => w.senses.length >= 2 || (w.stats.unknown || 0) >= 2 || (w.stats.quizWrong || 0) >= 2);
+    if (mode === "new") base = randomizedNewWords;
+    if (mode === "hard") {
+      base = words.filter(
+        (w) =>
+          w.senses.length >= 2 ||
+          (w.stats.unknown || 0) >= 2 ||
+          (w.stats.quizWrong || 0) >= 2
+      );
+    }
 
     if (flashcardFilter === "review") {
-      base = randomizedWrongWords.slice(0, todayTaskReviewCount);
+      base = randomizedReviewWords.slice(0, todayTaskReviewCount);
+      keepCurrentOrder = true;
     }
 
     if (flashcardFilter === "task") {
-  const reviewSlice = randomizedWrongWords.slice(0, todayTaskReviewCount);
-  const reviewIds = new Set(reviewSlice.map((w) => w.id));
+      const reviewSlice = randomizedReviewWords.slice(0, todayTaskReviewCount);
+      const reviewIds = new Set(reviewSlice.map((w) => w.id));
 
-  const newSlice = untouchedWords
-    .filter((w) => !reviewIds.has(w.id))
-    .slice(0, todayTaskNewCount);
+      const newSlice = randomizedNewWords
+        .filter((w) => !reviewIds.has(w.id))
+        .slice(0, todayTaskNewCount);
 
-  base = [...reviewSlice, ...newSlice];
-}
+      base = [...reviewSlice, ...newSlice];
+      keepCurrentOrder = true;
+    }
 
     if (flashcardFilter === "today_new") {
-      base = untouchedWords.slice(0, todayTaskNewCount);
+      base = randomizedNewWords.slice(0, todayTaskNewCount);
+      keepCurrentOrder = true;
     }
 
     if (flashcardFilter === "new") {
-      base = untouchedWords;
+      base = randomizedNewWords;
+      keepCurrentOrder = true;
     }
 
     const q = search.trim().toLowerCase();
@@ -1110,14 +1146,16 @@ const shouldRebuildDeckRef = useRef(true);
       ].join(" | ").toLowerCase().includes(q));
     }
 
-    return base.sort((a, b) => {
+    if (keepCurrentOrder) return base;
+
+    return [...base].sort((a, b) => {
       const pendingDelta = Number(Boolean(b.reviewState?.pending)) - Number(Boolean(a.reviewState?.pending));
       if (pendingDelta) return pendingDelta;
       const priorityDelta = (b.reviewState?.priority || 0) - (a.reviewState?.priority || 0);
       if (priorityDelta) return priorityDelta;
       return (b.reviewState?.lastWrongAt || 0) - (a.reviewState?.lastWrongAt || 0);
     });
-  }, [words, wrongWordBook, stubbornWordBook, mode, flashcardFilter, search, dailyPlan.wordFinishDays, dailyPlan.wordReviewCount, shuffleSeed]);
+  }, [words, wrongWordBook, stubbornWordBook, mode, flashcardFilter, search, dailyPlan.wordFinishDays, dailyPlan.wordReviewCount, shuffleSeed, orderMode]);
 
   const filteredPairs = useMemo(() => {
     let base = sixChoicePairs;
@@ -1193,43 +1231,10 @@ const shouldRebuildDeckRef = useRef(true);
   if (!ids.length) {
     setSessionOrderIds([]);
     setCurrentIndex(0);
-    shouldRebuildDeckRef.current = false;
-    restoredFlashcardStateRef.current = null;
     return;
   }
 
-  const restoredState = restoredFlashcardStateRef.current;
-
-  if (restoredState) {
-    const idSet = new Set(ids);
-    const restoredIds = Array.isArray(restoredState.sessionOrderIds)
-      ? restoredState.sessionOrderIds.filter((id) => idSet.has(id))
-      : [];
-    const missingIds = ids.filter((id) => !restoredIds.includes(id));
-    const nextIds = restoredIds.length
-      ? [...restoredIds, ...missingIds]
-      : orderMode === "ordered"
-        ? ids
-        : shuffleArray(ids);
-
-    const preferredWordId = restoredState.currentWordId || nextIds[restoredState.currentIndex || 0] || null;
-    const preferredIndex = preferredWordId ? nextIds.findIndex((id) => id === preferredWordId) : -1;
-    const nextIndex = preferredIndex >= 0
-      ? preferredIndex
-      : Math.min(Math.max(restoredState.currentIndex || 0, 0), nextIds.length - 1);
-
-    setSessionOrderIds(nextIds);
-    setCurrentIndex(nextIndex);
-    setFlipped(false);
-    setRevealLevel(0);
-    setRetrievalInput("");
-
-    restoredFlashcardStateRef.current = null;
-    shouldRebuildDeckRef.current = false;
-    return;
-  }
-
-  if (!shouldRebuildDeckRef.current && sessionOrderIds.length) {
+  if (restoredFlashcardStateRef.current && sessionOrderIds.length) {
     const validIdSet = new Set(words.map((w) => w.id));
     const keptIds = sessionOrderIds.filter((id) => validIdSet.has(id));
 
@@ -1238,8 +1243,14 @@ const shouldRebuildDeckRef = useRef(true);
         setSessionOrderIds(keptIds);
       }
       setCurrentIndex((prev) => Math.min(Math.max(prev, 0), keptIds.length - 1));
+      setFlipped(false);
+      setRevealLevel(0);
+      setRetrievalInput("");
+      restoredFlashcardStateRef.current = false;
       return;
     }
+
+    restoredFlashcardStateRef.current = false;
   }
 
   const nextIds = orderMode === "ordered" ? ids : shuffleArray(ids);
@@ -1248,9 +1259,7 @@ const shouldRebuildDeckRef = useRef(true);
   setFlipped(false);
   setRevealLevel(0);
   setRetrievalInput("");
-
-  shouldRebuildDeckRef.current = false;
-}, [words.length, orderMode, shuffleSeed, mode, flashcardFilter, search, storageReady]);
+}, [filteredWordMembershipSignature, orderMode, shuffleSeed, mode, flashcardFilter, search]);
 
   const sessionOrder = useMemo(() => {
     if (!sessionOrderIds.length) return [];
@@ -1266,6 +1275,8 @@ const shouldRebuildDeckRef = useRef(true);
   const promptSense = displayedSenses[0] || currentWord?.senses?.[0] || null;
   const revealSteps = ["中文词义", "英义 + 核心近义词", "反义词 + 情感色彩", "相关词 + 例句"];
   const nextRevealLabel = !flipped ? revealSteps[0] : revealLevel >= 3 ? "已全部展开" : revealSteps[revealLevel + 1];
+  const progress = sessionOrder.length ? ((currentIndex + 1) / sessionOrder.length) * 100 : 0;
+  const progressLabel = sessionOrder.length ? `${progress < 1 ? progress.toFixed(1) : Math.round(progress)}%` : "0%";
 
   function updateDailyPlan(key, value) {
     const numeric = Number(value);
@@ -1275,21 +1286,17 @@ const shouldRebuildDeckRef = useRef(true);
   function recordDailyProgress(delta) {
     const key = formatDate(Date.now());
     setDailyStats((prev) => {
-      const current = prev[key] || {};
+      const current = prev[key] || { reviewed: 0, known: 0, unknown: 0, quizCorrect: 0, quizWrong: 0, bbPairCorrect: 0, bbPairWrong: 0 };
       return {
         ...prev,
         [key]: {
-          ...current,
-          reviewed: (current.reviewed || 0) + (delta.reviewed || 0),
-          newReviewed: (current.newReviewed || 0) + (delta.newReviewed || 0),
-          reviewReviewed: (current.reviewReviewed || 0) + (delta.reviewReviewed || 0),
-          known: (current.known || 0) + (delta.known || 0),
-          unknown: (current.unknown || 0) + (delta.unknown || 0),
-          quizCorrect: (current.quizCorrect || 0) + (delta.quizCorrect || 0),
-          quizWrong: (current.quizWrong || 0) + (delta.quizWrong || 0),
-          bbPairCorrect: (current.bbPairCorrect || 0) + (delta.bbPairCorrect || 0),
-          bbPairWrong: (current.bbPairWrong || 0) + (delta.bbPairWrong || 0),
-          updatedAt: Date.now(),
+          reviewed: current.reviewed + (delta.reviewed || 0),
+          known: current.known + (delta.known || 0),
+          unknown: current.unknown + (delta.unknown || 0),
+          quizCorrect: current.quizCorrect + (delta.quizCorrect || 0),
+          quizWrong: current.quizWrong + (delta.quizWrong || 0),
+          bbPairCorrect: current.bbPairCorrect + (delta.bbPairCorrect || 0),
+          bbPairWrong: current.bbPairWrong + (delta.bbPairWrong || 0),
         },
       };
     });
@@ -1380,10 +1387,6 @@ function recordFlashcardResult(
 }
 
   function openFlashcardDeck(nextMode = "all", options = {}) {
-    shouldRebuildDeckRef.current = true;
-    setSessionOrderIds([]);
-    setFlashcardCompleteMessage("");
-
     startFlashcardAnalyticsSession({
   mode: nextMode,
   filter: options.filter || "all",
@@ -1409,29 +1412,29 @@ function recordFlashcardResult(
   }
 
   function getFlashcardCompleteMessage() {
-  if (flashcardFilter === "task") return "太棒啦，今日总任务全部完成咯！";
-  if (flashcardFilter === "review") return "太棒啦，今日复习结束哦！";
-  if (flashcardFilter === "today_new" || flashcardFilter === "new") return "太棒了，今日新词任务完成咯！";
-  return "太棒啦，这组闪卡完成咯！";
-}
+    if (flashcardFilter === "task") return "太棒啦，今日总任务全部完成咯！";
+    if (flashcardFilter === "review") return "太棒啦，今日复习结束哦！";
+    if (flashcardFilter === "today_new" || flashcardFilter === "new") return "太棒啦，今日新词任务完成咯！";
+    return "太棒啦，这组闪卡完成咯！";
+  }
 
-function goNext() {
-  if (!sessionOrder.length) return;
+  function goNext() {
+    if (!sessionOrder.length) return;
 
-  if (currentIndex + 1 >= sessionOrder.length) {
-    setFlashcardCompleteMessage(getFlashcardCompleteMessage());
-    flushFlashcardSession("completed");
+    if (currentIndex + 1 >= sessionOrder.length) {
+      setFlashcardCompleteMessage(getFlashcardCompleteMessage());
+      flushFlashcardSession("completed");
+      setFlipped(false);
+      setRevealLevel(0);
+      setRetrievalInput("");
+      return;
+    }
+
+    setCurrentIndex((prev) => prev + 1);
     setFlipped(false);
     setRevealLevel(0);
     setRetrievalInput("");
-    return;
   }
-
-  setCurrentIndex((prev) => prev + 1);
-  setFlipped(false);
-  setRevealLevel(0);
-  setRetrievalInput("");
-}
 
   function updateWordResult(type) {
   if (!currentWord) return;
@@ -1486,14 +1489,7 @@ function goNext() {
       };
     }));
 
-    const isReviewCard = Boolean((currentWord.reviewState?.pending || (currentWord.stats?.unknown || 0) > 0 || (currentWord.stats?.quizWrong || 0) > 0) && (currentWord.reviewState?.lastWrongAt || 0) < getStartOfLocalDay(Date.now()));
-    const delta = {
-      reviewed: 1,
-      newReviewed: isReviewCard ? 0 : 1,
-      reviewReviewed: isReviewCard ? 1 : 0,
-      known: type === "known" ? 1 : 0,
-      unknown: type === "unknown" ? 1 : 0,
-    };
+    const delta = { reviewed: 1, known: type === "known" ? 1 : 0, unknown: type === "unknown" ? 1 : 0 };
     setSessionStats((prev) => ({ ...prev, reviewed: prev.reviewed + 1, known: prev.known + delta.known, unknown: prev.unknown + delta.unknown }));
     recordDailyProgress(delta);
     goNext();
@@ -1834,7 +1830,6 @@ function goNext() {
   }
 
   function shuffleSession() {
-    shouldRebuildDeckRef.current = true;
     setShuffleSeed((prev) => prev + 1);
   }
 
@@ -1843,62 +1838,41 @@ function goNext() {
   const pairNewCount = sixChoicePairs.filter((pair) => (pair.stats?.seen || 0) === 0).length;
   const dailyWordNewTarget = Math.ceil((newWordCount || words.length || 0) / Math.max(1, dailyPlan.wordFinishDays || 1));
   const dailyPairNewTarget = Math.ceil((pairNewCount || sixChoicePairs.length || 0) / Math.max(1, dailyPlan.pairFinishDays || 1));
-  const todayKey = formatDate(Date.now());
-  const todayStat = dailyStats[todayKey] || {};
-  const todayWordStudyCount = todayStat.reviewed || 0;
+  const todayStatsKey = formatDate(Date.now());
+  const todayStat = dailyStats[todayStatsKey] || {};
   const todayNewWordStudyCount = todayStat.newReviewed || 0;
   const todayReviewWordStudyCount = todayStat.reviewReviewed || 0;
+  const todayWordStudyCount = todayStat.reviewed || 0;
   const todayPairPracticeCount = (todayStat.bbPairCorrect || 0) + (todayStat.bbPairWrong || 0);
   const todayQuizCount = (todayStat.quizCorrect || 0) + (todayStat.quizWrong || 0);
   const todayQuizAccuracy = todayQuizCount ? Math.round(((todayStat.quizCorrect || 0) / todayQuizCount) * 100) : null;
-  const todayWordTarget = dailyWordNewTarget + dailyPlan.wordReviewCount;
-  const todayNewWordTarget = dailyWordNewTarget;
-  const todayReviewWordTarget = dailyPlan.wordReviewCount;
+  const todayReviewWordTarget = todayReviewTargetActual;
+  const todayWordTarget = dailyWordNewTarget + todayReviewWordTarget;
   const todayPairTarget = dailyPairNewTarget + dailyPlan.pairReviewCount;
-  const todayWordRemaining = Math.max(0, todayWordTarget - todayWordStudyCount);
-  const todayNewWordRemaining = Math.max(0, todayNewWordTarget - todayNewWordStudyCount);
+  const todayNewWordRemaining = Math.max(0, dailyWordNewTarget - todayNewWordStudyCount);
   const todayReviewWordRemaining = Math.max(0, todayReviewWordTarget - todayReviewWordStudyCount);
   const todayPairRemaining = Math.max(0, todayPairTarget - todayPairPracticeCount);
-  const todayWordProgressPct = todayWordTarget ? Math.min(100, Math.round((todayWordStudyCount / todayWordTarget) * 100)) : 0;
-  const todayNewWordProgressPct = todayNewWordTarget ? Math.min(100, Math.round((todayNewWordStudyCount / todayNewWordTarget) * 100)) : 0;
+  const todayNewWordProgressPct = dailyWordNewTarget ? Math.min(100, Math.round((todayNewWordStudyCount / dailyWordNewTarget) * 100)) : 100;
   const todayReviewWordProgressPct = todayReviewWordTarget ? Math.min(100, Math.round((todayReviewWordStudyCount / todayReviewWordTarget) * 100)) : 100;
+  const todayWordProgressPct = todayWordTarget ? Math.min(100, Math.round((todayWordStudyCount / todayWordTarget) * 100)) : 100;
   const todayPairProgressPct = todayPairTarget ? Math.min(100, Math.round((todayPairPracticeCount / todayPairTarget) * 100)) : 0;
   const todayQuizProgressPct = todayQuizAccuracy === null ? 0 : Math.min(100, Math.round((todayQuizAccuracy / Math.max(1, dailyPlan.quizTarget)) * 100));
   const wrongCount = wrongWordBook.length;
-  const wordPlanStatus = todayWordRemaining === 0 ? "done" : todayWordProgressPct >= 70 ? "warning" : "pending";
   const newWordPlanStatus = todayNewWordRemaining === 0 ? "done" : todayNewWordProgressPct >= 70 ? "warning" : "pending";
-  const reviewWordPlanStatus = todayReviewWordRemaining === 0 ? "done" : todayReviewWordProgressPct >= 70 ? "warning" : "pending";
+  const reviewWordPlanStatus = todayReviewWordTarget === 0 || todayReviewWordRemaining === 0 ? "done" : todayReviewWordProgressPct >= 70 ? "warning" : "pending";
+  const wordPlanStatus = [newWordPlanStatus, reviewWordPlanStatus].every((status) => status === "done") ? "done" : [newWordPlanStatus, reviewWordPlanStatus].some((status) => status === "warning" || status === "done") ? "warning" : "pending";
   const pairPlanStatus = todayPairRemaining === 0 ? "done" : todayPairProgressPct >= 70 ? "warning" : "pending";
   const quizPlanStatus = todayQuizAccuracy === null ? "pending" : todayQuizAccuracy >= dailyPlan.quizTarget ? "done" : todayQuizAccuracy >= Math.max(0, dailyPlan.quizTarget - 10) ? "warning" : "pending";
-  const overallPlanStatus = [wordPlanStatus, pairPlanStatus, quizPlanStatus].every((status) => status === "done")
+  const overallPlanStatus = [newWordPlanStatus, reviewWordPlanStatus, pairPlanStatus, quizPlanStatus].every((status) => status === "done")
     ? "done"
-    : [wordPlanStatus, pairPlanStatus, quizPlanStatus].some((status) => status === "warning" || status === "done")
+    : [newWordPlanStatus, reviewWordPlanStatus, pairPlanStatus, quizPlanStatus].some((status) => status === "warning" || status === "done")
       ? "warning"
       : "pending";
   const overallPlanMeta = getPlanStatusMeta(overallPlanStatus);
-  const wordPlanMeta = getPlanStatusMeta(wordPlanStatus);
   const newWordPlanMeta = getPlanStatusMeta(newWordPlanStatus);
   const reviewWordPlanMeta = getPlanStatusMeta(reviewWordPlanStatus);
   const pairPlanMeta = getPlanStatusMeta(pairPlanStatus);
   const quizPlanMeta = getPlanStatusMeta(quizPlanStatus);
-  const wrongWordSummaryByDate = useMemo(() => {
-    const map = new Map();
-    filteredWrongWordSummary.forEach((item) => {
-      const key = item.lastWrongAt ? formatDate(item.lastWrongAt) : "未记录日期";
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(item);
-    });
-    return Array.from(map.entries()).sort((a, b) => String(b[0]).localeCompare(String(a[0])));
-  }, [filteredWrongWordSummary]);
-  const wrongPairSummaryByDate = useMemo(() => {
-    const map = new Map();
-    filteredWrongPairSummary.forEach((item) => {
-      const key = item.lastWrongAt ? formatDate(item.lastWrongAt) : "未记录日期";
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(item);
-    });
-    return Array.from(map.entries()).sort((a, b) => String(b[0]).localeCompare(String(a[0])));
-  }, [filteredWrongPairSummary]);
   
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-8">
@@ -2065,50 +2039,32 @@ function goNext() {
           <div className="order-1 space-y-6 lg:order-2">
             {studyView === "flashcards" ? (
               <>
-                {(mode !== "all" || flashcardFilter !== "all") ? (
-                  <div className="flex justify-end">
-                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => openFlashcardDeck("all", { filter: "all" })}>返回全部闪卡</Button>
-                  </div>
-                ) : null}
-
                 {flashcardCompleteMessage ? (
                   <Card className="rounded-[28px] border-violet-100 bg-white/90 shadow-sm">
                     <CardContent className="flex min-h-[560px] flex-col items-center justify-center gap-5 p-8 text-center">
                       <div className="rounded-full bg-violet-50 px-5 py-2 text-sm font-medium text-violet-700">
                         Completed
-                        </div>
-                        <h2 className="text-3xl font-semibold tracking-tight text-slate-900 md:text-4xl">
-                          {flashcardCompleteMessage}
-                          </h2>
-                          <p className="max-w-md text-sm leading-7 text-slate-500">
-                            可以休息一下，或者回到今日计划继续其他任务。
-                            </p>
-                            <div className="mt-2 flex flex-wrap justify-center gap-3">
-                              <Button
-                              className="rounded-2xl"
-                              onClick={() => openFlashcardDeck("all", { filter: "task", flashcardMode })}
-                              >
-                                查看今日总任务
-                                </Button>
-                                <Button
-                                variant="outline"
-                                className="rounded-2xl"
-                                onClick={() => openFlashcardDeck("all", { filter: "today_new", flashcardMode })}
-                                >
-                                  继续今日新词
-                                  </Button>
-                                  <Button
-                                  variant="outline"
-                                  className="rounded-2xl"
-                                  onClick={() => openFlashcardDeck("all", { filter: "review", flashcardMode: "recognition" })}
-                                  >
-                                    查看今日复习
-                                    </Button>
-                                    </div>
-                                    </CardContent>
-                                    </Card>
-                                    ) : currentWord ? (
-                                      
+                      </div>
+                      <h2 className="text-3xl font-semibold tracking-tight text-slate-900 md:text-4xl">
+                        {flashcardCompleteMessage}
+                      </h2>
+                      <p className="max-w-md text-sm leading-7 text-slate-500">
+                        可以休息一下，或者回到今日计划继续其他任务。
+                      </p>
+                      <div className="mt-2 flex flex-wrap justify-center gap-3">
+                        <Button className="rounded-2xl" onClick={() => openFlashcardDeck("all", { filter: "task", flashcardMode })}>
+                          查看今日总任务
+                        </Button>
+                        <Button variant="outline" className="rounded-2xl" onClick={() => openFlashcardDeck("all", { filter: "today_new", flashcardMode })}>
+                          继续今日新词
+                        </Button>
+                        <Button variant="outline" className="rounded-2xl" onClick={() => openFlashcardDeck("all", { filter: "review", flashcardMode: "recognition" })}>
+                          查看今日复习
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ) : currentWord ? (
                   <AnimatePresence mode="wait">
                     <motion.div key={`${currentWord.id}-${flipped}-${revealLevel}-${currentIndex}`} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.2 }}>
                       <Card className="min-h-[560px] cursor-pointer rounded-[28px] shadow-sm" onClick={() => { if (!flipped) setFlipped(true); else setRevealLevel((v) => Math.min(v + 1, 3)); }}>
@@ -2253,6 +2209,153 @@ function goNext() {
             )}
 
             <Card className="rounded-2xl shadow-sm">
+              <CardHeader className="space-y-4">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <CardTitle className="flex items-center gap-2 text-lg">
+                    <Brain className="h-5 w-5" />
+                    错题汇总
+                  </CardTitle>
+
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="rounded-full"
+                      onClick={() => {
+                          track("open_wrong_book_words", { wrong_count: wrongWordSummary.length });
+                          openFlashcardDeck("wrong", { filter: "all", flashcardMode: "recognition" });
+                        }}
+                    >
+                      去刷单词错题
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="rounded-full"
+                      onClick={() => {
+                        setStudyView("quiz");
+                        setQuizMode("bb_pairs");
+                        setPairReviewMode("wrong");
+                      }}
+                    >
+                      去刷六选二错题
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="rounded-full"
+                      onClick={() => {
+                        if (reviewSummaryTab === "words") clearAllWrongWords();
+                        else clearAllWrongPairs();
+                      }}
+                      disabled={reviewSummaryTab === "words" ? !wrongWordSummary.length : !wrongPairSummary.length}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      清空当前错题表
+                    </Button>
+                  </div>
+                </div>
+
+                <Tabs value={reviewSummaryTab} onValueChange={setReviewSummaryTab} className="w-full">
+                  <TabsList className="grid w-full grid-cols-2 gap-2 h-auto bg-transparent p-0">
+                    <TabsTrigger value="words" className="rounded-xl border px-3 py-2">
+                      单词错题表（{wrongWordSummary.length}）
+                    </TabsTrigger>
+                    <TabsTrigger value="pairs" className="rounded-xl border px-3 py-2">
+                      六选二错题表（{wrongPairSummary.length}）
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
+
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <Input
+                    value={reviewSummarySearch}
+                    onChange={(e) => setReviewSummarySearch(e.target.value)}
+                    placeholder={reviewSummaryTab === "words" ? "搜索单词 / 中文义 / 英文义..." : "搜索词对 / 中文释义 / 频率 / 来源..."}
+                    className="rounded-2xl pl-9"
+                  />
+                </div>
+              </CardHeader>
+
+              <CardContent>
+                {reviewSummaryTab === "words" ? (
+                  filteredWrongWordSummary.length ? (
+                    <div className="space-y-2">
+                      {filteredWrongWordSummary.map((item, index) => (
+                        <div key={item.id} className="rounded-2xl border bg-slate-50 px-4 py-3">
+                          <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                            <div className="min-w-0">
+                              <div className="text-base font-semibold">
+                                {index + 1}. {item.word}
+                              </div>
+                              <div className="mt-1 text-sm text-slate-700">{item.meaning || "未填写中文义"}</div>
+                              {item.en ? <div className="mt-1 text-xs text-slate-500">{item.en}</div> : null}
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Badge variant="outline">总错 {item.totalWrong}</Badge>
+                              <Badge variant="outline">闪卡不认识 {item.unknownCount}</Badge>
+                              <Badge variant="outline">Quiz 错误 {item.quizWrongCount}</Badge>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="rounded-full"
+                                onClick={() => clearWrongWordRecord(item.id)}
+                              >
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                清空这条
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed px-4 py-8 text-center text-sm text-slate-500">
+                      这里还没有单词错题。
+                    </div>
+                  )
+                ) : filteredWrongPairSummary.length ? (
+                  <div className="space-y-2">
+                    {filteredWrongPairSummary.map((item, index) => (
+                      <div key={item.id} className="rounded-2xl border bg-slate-50 px-4 py-3">
+                        <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                          <div className="min-w-0">
+                            <div className="text-base font-semibold">
+                              {index + 1}. {item.a} = {item.b}
+                            </div>
+                            <div className="mt-1 text-sm text-slate-700">{item.zh || "未填写中文释义"}</div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {[item.frequency, item.source].filter(Boolean).join(" · ")}
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant="outline">错误次数 {item.wrongCount}</Badge>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="rounded-full"
+                              onClick={() => clearWrongPairRecord(item.id)}
+                            >
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              清空这条
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-dashed px-4 py-8 text-center text-sm text-slate-500">
+                    这里还没有六选二错题。
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="rounded-2xl shadow-sm">
               <CardHeader>
                 <CardTitle className="text-lg">今日计划模块</CardTitle>
               </CardHeader>
@@ -2269,12 +2372,12 @@ function goNext() {
                     <div className="rounded-2xl bg-slate-50 p-3 space-y-2">
                       <div className="flex items-center justify-between text-sm"><span className="font-medium text-slate-700">今日新词</span><Badge variant="outline" className={`rounded-full ${newWordPlanMeta.badgeClass}`}>{newWordPlanMeta.label}</Badge></div>
                       <Progress value={todayNewWordProgressPct} className="h-2" />
-                      <div className="text-xs text-slate-500">{todayNewWordStudyCount} / {todayNewWordTarget}，{todayNewWordRemaining > 0 ? `还差 ${todayNewWordRemaining} 个` : "已达标"}</div>
+                      <div className="text-xs text-slate-500">{todayNewWordStudyCount} / {dailyWordNewTarget}，{todayNewWordRemaining > 0 ? `还差 ${todayNewWordRemaining} 个` : "已达标"}</div>
                     </div>
                     <div className="rounded-2xl bg-slate-50 p-3 space-y-2">
                       <div className="flex items-center justify-between text-sm"><span className="font-medium text-slate-700">今日复习</span><Badge variant="outline" className={`rounded-full ${reviewWordPlanMeta.badgeClass}`}>{reviewWordPlanMeta.label}</Badge></div>
                       <Progress value={todayReviewWordProgressPct} className="h-2" />
-                      <div className="text-xs text-slate-500">{todayReviewWordStudyCount} / {todayReviewWordTarget}，{todayReviewWordRemaining > 0 ? `还差 ${todayReviewWordRemaining} 个` : "已达标"}</div>
+                      <div className="text-xs text-slate-500">{todayReviewWordStudyCount} / {todayReviewWordTarget}，{todayReviewWordRemaining > 0 ? `还差 ${todayReviewWordRemaining} 个` : todayReviewWordTarget === 0 ? "暂无可复习错题" : "已达标"}</div>
                     </div>
                     <div className="rounded-2xl bg-slate-50 p-3 space-y-2">
                       <div className="flex items-center justify-between text-sm"><span className="font-medium text-slate-700">六选二任务</span><Badge variant="outline" className={`rounded-full ${pairPlanMeta.badgeClass}`}>{pairPlanMeta.label}</Badge></div>
@@ -2321,79 +2424,6 @@ function goNext() {
                 </div>
               </CardContent>
             </Card>
-
-            <Card className="rounded-2xl shadow-sm">
-              <CardHeader className="space-y-4">
-                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <CardTitle className="flex items-center gap-2 text-lg">
-                      <Brain className="h-5 w-5" />
-                      错题汇总
-                    </CardTitle>
-                    <div className="mt-1 text-xs text-slate-500">按日期展开 · 每日错题窗口 · 固定高度滚动，不再无限拉长</div>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => { track("open_wrong_book_words", { wrong_count: wrongWordSummary.length }); openFlashcardDeck("wrong", { filter: "all", flashcardMode: "recognition" }); }}>去刷单词错题</Button>
-                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => { setStudyView("quiz"); setQuizMode("bb_pairs"); setPairReviewMode("wrong"); }}>去刷六选二错题</Button>
-                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => { if (reviewSummaryTab === "words") clearAllWrongWords(); else clearAllWrongPairs(); }} disabled={reviewSummaryTab === "words" ? !wrongWordSummary.length : !wrongPairSummary.length}><Trash2 className="mr-2 h-4 w-4" />清空当前错题表</Button>
-                  </div>
-                </div>
-                <Tabs value={reviewSummaryTab} onValueChange={setReviewSummaryTab} className="w-full">
-                  <TabsList className="grid w-full grid-cols-2 gap-2 h-auto bg-transparent p-0">
-                    <TabsTrigger value="words" className="rounded-xl border px-3 py-2">单词错题表（{wrongWordSummary.length}）</TabsTrigger>
-                    <TabsTrigger value="pairs" className="rounded-xl border px-3 py-2">六选二错题表（{wrongPairSummary.length}）</TabsTrigger>
-                  </TabsList>
-                </Tabs>
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <Input value={reviewSummarySearch} onChange={(e) => setReviewSummarySearch(e.target.value)} placeholder={reviewSummaryTab === "words" ? "搜索单词 / 中文义 / 英文义..." : "搜索词对 / 中文释义 / 频率 / 来源..."} className="rounded-2xl pl-9" />
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="max-h-[420px] overflow-y-auto pr-2">
-                  {reviewSummaryTab === "words" ? (
-                    wrongWordSummaryByDate.length ? (
-                      <div className="space-y-3">
-                        {wrongWordSummaryByDate.map(([date, items]) => (
-                          <details key={date} open className="rounded-2xl border bg-white">
-                            <summary className="flex cursor-pointer items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-slate-700"><span>{date} · {items.length} 个单词错题</span><Badge variant="outline" className="rounded-full">每日错题窗口</Badge></summary>
-                            <div className="space-y-2 border-t bg-slate-50/60 p-3">
-                              {items.map((item, index) => (
-                                <div key={item.id} className="rounded-2xl border bg-white px-4 py-3">
-                                  <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                                    <div className="min-w-0"><div className="text-base font-semibold">{index + 1}. {item.word}</div><div className="mt-1 text-sm text-slate-700">{item.meaning || "未填写中文义"}</div>{item.en ? <div className="mt-1 text-xs text-slate-500">{item.en}</div> : null}</div>
-                                    <div className="flex flex-wrap items-center gap-2"><Badge variant="outline">总错 {item.totalWrong}</Badge><Badge variant="outline">闪卡 {item.unknownCount}</Badge><Badge variant="outline">Quiz {item.quizWrongCount}</Badge><Button variant="outline" size="sm" className="rounded-full" onClick={() => clearWrongWordRecord(item.id)}><Trash2 className="mr-2 h-4 w-4" />清空</Button></div>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </details>
-                        ))}
-                      </div>
-                    ) : <div className="rounded-2xl border border-dashed px-4 py-8 text-center text-sm text-slate-500">这里还没有单词错题。</div>
-                  ) : wrongPairSummaryByDate.length ? (
-                    <div className="space-y-3">
-                      {wrongPairSummaryByDate.map(([date, items]) => (
-                        <details key={date} open className="rounded-2xl border bg-white">
-                          <summary className="flex cursor-pointer items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-slate-700"><span>{date} · {items.length} 组六选二错题</span><Badge variant="outline" className="rounded-full">每日错题窗口</Badge></summary>
-                          <div className="space-y-2 border-t bg-slate-50/60 p-3">
-                            {items.map((item, index) => (
-                              <div key={item.id} className="rounded-2xl border bg-white px-4 py-3">
-                                <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                                  <div className="min-w-0"><div className="text-base font-semibold">{index + 1}. {item.a} = {item.b}</div><div className="mt-1 text-sm text-slate-700">{item.zh || "未填写中文释义"}</div><div className="mt-1 text-xs text-slate-500">{[item.frequency, item.source].filter(Boolean).join(" · ")}</div></div>
-                                  <div className="flex flex-wrap items-center gap-2"><Badge variant="outline">错误次数 {item.wrongCount}</Badge><Button variant="outline" size="sm" className="rounded-full" onClick={() => clearWrongPairRecord(item.id)}><Trash2 className="mr-2 h-4 w-4" />清空</Button></div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </details>
-                      ))}
-                    </div>
-                  ) : <div className="rounded-2xl border border-dashed px-4 py-8 text-center text-sm text-slate-500">这里还没有六选二错题。</div>}
-                </div>
-              </CardContent>
-            </Card>
-
           </div>
         </div>
       </div>

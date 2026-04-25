@@ -197,7 +197,34 @@ function getStartOfLocalDay(timestamp = Date.now()) {
   d.setHours(0, 0, 0, 0);
   return d.getTime();
 }
+function hashString(input) {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
 
+function seededShuffleArray(items, seedText) {
+  const arr = [...items];
+  let seed = hashString(seedText) || 1;
+
+  function random() {
+    seed += 0x6d2b79f5;
+    let t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+
+  return arr;
+}
 function sentimentLabel(value) {
   if (value === "positive") return "偏褒义";
   if (value === "negative") return "偏贬义";

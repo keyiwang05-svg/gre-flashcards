@@ -1042,11 +1042,31 @@ const shouldRebuildDeckRef = useRef(true);
 
   const filteredWords = useMemo(() => {
     const now = Date.now();
-    const untouchedWords = words.filter((w) => w.stats.seen === 0 && (w.stats.quizCorrect || 0) === 0 && (w.stats.quizWrong || 0) === 0);
-    const todayTaskNewCount = Math.ceil((untouchedWords.length || words.length || 0) / Math.max(1, dailyPlan.wordFinishDays || 1));
-    const todayTaskReviewCount = Math.max(0, dailyPlan.wordReviewCount || 0);
-    const randomizedWrongWords = shuffleArray(wrongWordBook);
+    const todayStart = getStartOfLocalDay(now);
+    const untouchedWords = words.filter(
+      (w) =>
+        w.stats.seen === 0 &&
+      (w.stats.quizCorrect || 0) === 0 &&
+      (w.stats.quizWrong || 0) === 0
+  );
+  const todayTaskNewCount = Math.ceil(
+    (untouchedWords.length || words.length || 0) /
+      Math.max(1, dailyPlan.wordFinishDays || 1)
+  );
+  const todayTaskReviewCount = Math.max(0, dailyPlan.wordReviewCount || 0);
 
+  const eligibleReviewWords = wrongWordBook.filter((w) => {
+    const wasWrongToday = (w.reviewState?.lastWrongAt || 0) >= todayStart;
+
+    const hasWrongHistory =
+      (w.stats?.unknown || 0) > 0 ||
+      (w.stats?.quizWrong || 0) > 0 ||
+      Boolean(w.reviewState?.pending);
+
+    return hasWrongHistory && !wasWrongToday;
+  });
+
+  const randomizedWrongWords = shuffleArray(eligibleReviewWords);
     let base = [...words];
     if (mode === "wrong") base = wrongWordBook;
     if (mode === "stubborn") base = stubbornWordBook;
@@ -1056,16 +1076,24 @@ const shouldRebuildDeckRef = useRef(true);
     if (mode === "hard") base = words.filter((w) => w.senses.length >= 2 || (w.stats.unknown || 0) >= 2 || (w.stats.quizWrong || 0) >= 2);
 
     if (flashcardFilter === "review") {
-      base = randomizedWrongWords.slice(0, todayTaskReviewCount);
+      const reviewSlice = randomizedWrongWords.slice(0, todayTaskReviewCount);
+      const reviewIds = new Set(reviewSlice.map((w) => w.id));
+      const fillerNewWords = untouchedWords
+        .filter((w) => !reviewIds.has(w.id))
+        .slice(0, Math.max(0, todayTaskReviewCount - reviewSlice.length));
+      base = [...reviewSlice, ...fillerNewWords];
     }
 
     if (flashcardFilter === "task") {
-      const reviewSlice = randomizedWrongWords.slice(0, todayTaskReviewCount);
-      const reviewIds = new Set(reviewSlice.map((w) => w.id));
-      const newSlice = untouchedWords.filter((w) => !reviewIds.has(w.id)).slice(0, todayTaskNewCount);
-      const taskIds = new Set([...reviewSlice, ...newSlice].map((w) => w.id));
-      base = words.filter((w) => taskIds.has(w.id));
-    }
+  const reviewSlice = randomizedWrongWords.slice(0, todayTaskReviewCount);
+  const reviewIds = new Set(reviewSlice.map((w) => w.id));
+
+  const newSlice = untouchedWords
+    .filter((w) => !reviewIds.has(w.id))
+    .slice(0, todayTaskNewCount);
+
+  base = [...reviewSlice, ...newSlice];
+}
 
     if (flashcardFilter === "today_new") {
       base = untouchedWords.slice(0, todayTaskNewCount);
@@ -1357,6 +1385,8 @@ function recordFlashcardResult(
 
   function openFlashcardDeck(nextMode = "all", options = {}) {
     shouldRebuildDeckRef.current = true;
+    setSessionOrderIds([]);
+
     startFlashcardAnalyticsSession({
   mode: nextMode,
   filter: options.filter || "all",

@@ -753,6 +753,7 @@ export default function GREFlashcardsApp() {
   const [words, setWords] = useState([]);
   const [sixChoicePairs, setSixChoicePairs] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [flashcardCompleteMessage, setFlashcardCompleteMessage] = useState("");
   const [flipped, setFlipped] = useState(false);
   const [mode, setMode] = useState("all");
   const [studyView, setStudyView] = useState("flashcards");
@@ -1076,12 +1077,7 @@ const shouldRebuildDeckRef = useRef(true);
     if (mode === "hard") base = words.filter((w) => w.senses.length >= 2 || (w.stats.unknown || 0) >= 2 || (w.stats.quizWrong || 0) >= 2);
 
     if (flashcardFilter === "review") {
-      const reviewSlice = randomizedWrongWords.slice(0, todayTaskReviewCount);
-      const reviewIds = new Set(reviewSlice.map((w) => w.id));
-      const fillerNewWords = untouchedWords
-        .filter((w) => !reviewIds.has(w.id))
-        .slice(0, Math.max(0, todayTaskReviewCount - reviewSlice.length));
-      base = [...reviewSlice, ...fillerNewWords];
+      base = randomizedWrongWords.slice(0, todayTaskReviewCount);
     }
 
     if (flashcardFilter === "task") {
@@ -1386,6 +1382,7 @@ function recordFlashcardResult(
   function openFlashcardDeck(nextMode = "all", options = {}) {
     shouldRebuildDeckRef.current = true;
     setSessionOrderIds([]);
+    setFlashcardCompleteMessage("");
 
     startFlashcardAnalyticsSession({
   mode: nextMode,
@@ -1411,13 +1408,30 @@ function recordFlashcardResult(
     setRetrievalInput("");
   }
 
-  function goNext() {
-    if (!sessionOrder.length) return;
-    setCurrentIndex((prev) => (prev + 1 >= sessionOrder.length ? 0 : prev + 1));
+  function getFlashcardCompleteMessage() {
+  if (flashcardFilter === "task") return "太棒啦，今日总任务全部完成咯！";
+  if (flashcardFilter === "review") return "太棒啦，今日复习结束哦！";
+  if (flashcardFilter === "today_new" || flashcardFilter === "new") return "太棒了，今日新词任务完成咯！";
+  return "太棒啦，这组闪卡完成咯！";
+}
+
+function goNext() {
+  if (!sessionOrder.length) return;
+
+  if (currentIndex + 1 >= sessionOrder.length) {
+    setFlashcardCompleteMessage(getFlashcardCompleteMessage());
+    flushFlashcardSession("completed");
     setFlipped(false);
     setRevealLevel(0);
     setRetrievalInput("");
+    return;
   }
+
+  setCurrentIndex((prev) => prev + 1);
+  setFlipped(false);
+  setRevealLevel(0);
+  setRetrievalInput("");
+}
 
   function updateWordResult(type) {
   if (!currentWord) return;
@@ -2057,7 +2071,44 @@ function recordFlashcardResult(
                   </div>
                 ) : null}
 
-                {currentWord ? (
+                {flashcardCompleteMessage ? (
+                  <Card className="rounded-[28px] border-violet-100 bg-white/90 shadow-sm">
+                    <CardContent className="flex min-h-[560px] flex-col items-center justify-center gap-5 p-8 text-center">
+                      <div className="rounded-full bg-violet-50 px-5 py-2 text-sm font-medium text-violet-700">
+                        Completed
+                        </div>
+                        <h2 className="text-3xl font-semibold tracking-tight text-slate-900 md:text-4xl">
+                          {flashcardCompleteMessage}
+                          </h2>
+                          <p className="max-w-md text-sm leading-7 text-slate-500">
+                            可以休息一下，或者回到今日计划继续其他任务。
+                            </p>
+                            <div className="mt-2 flex flex-wrap justify-center gap-3">
+                              <Button
+                              className="rounded-2xl"
+                              onClick={() => openFlashcardDeck("all", { filter: "task", flashcardMode })}
+                              >
+                                查看今日总任务
+                                </Button>
+                                <Button
+                                variant="outline"
+                                className="rounded-2xl"
+                                onClick={() => openFlashcardDeck("all", { filter: "today_new", flashcardMode })}
+                                >
+                                  继续今日新词
+                                  </Button>
+                                  <Button
+                                  variant="outline"
+                                  className="rounded-2xl"
+                                  onClick={() => openFlashcardDeck("all", { filter: "review", flashcardMode: "recognition" })}
+                                  >
+                                    查看今日复习
+                                    </Button>
+                                    </div>
+                                    </CardContent>
+                                    </Card>
+                                    ) : currentWord ? (
+                                      
                   <AnimatePresence mode="wait">
                     <motion.div key={`${currentWord.id}-${flipped}-${revealLevel}-${currentIndex}`} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.2 }}>
                       <Card className="min-h-[560px] cursor-pointer rounded-[28px] shadow-sm" onClick={() => { if (!flipped) setFlipped(true); else setRevealLevel((v) => Math.min(v + 1, 3)); }}>

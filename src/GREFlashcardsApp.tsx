@@ -782,6 +782,7 @@ export default function GREFlashcardsApp() {
   const [words, setWords] = useState([]);
   const [sixChoicePairs, setSixChoicePairs] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [flashcardCompleteMessage, setFlashcardCompleteMessage] = useState("");
   const [flipped, setFlipped] = useState(false);
   const [mode, setMode] = useState("all");
   const [studyView, setStudyView] = useState("flashcards");

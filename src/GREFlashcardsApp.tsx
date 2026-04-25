@@ -192,6 +192,11 @@ function formatDate(ts) {
   const d = new Date(ts);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
+function getStartOfLocalDay(timestamp = Date.now()) {
+  const d = new Date(timestamp);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
 
 function sentimentLabel(value) {
   if (value === "positive") return "偏褒义";

@@ -813,6 +813,8 @@ export default function GREFlashcardsApp() {
   const [shuffleSeed, setShuffleSeed] = useState(0);
   const [reviewSummaryTab, setReviewSummaryTab] = useState("words");
   const [reviewSummarySearch, setReviewSummarySearch] = useState("");
+  const [favoriteSummaryTab, setFavoriteSummaryTab] = useState("words");
+  const [favoriteSummarySearch, setFavoriteSummarySearch] = useState("");
   const fileRef = useRef(null);
   const persistTimeoutRef = useRef(null);
   const flashcardSessionRef = useRef<{
@@ -1013,12 +1015,13 @@ const shouldRebuildDeckRef = useRef(true);
 
     const eligibleReviewWords = wrongWordBook.filter((w) => {
       const lastWrongAt = w.reviewState?.lastWrongAt || 0;
+      const lastReviewedAt = w.reviewState?.lastReviewedAt || 0;
       const hasWrongHistory =
         (w.stats?.unknown || 0) > 0 ||
         (w.stats?.quizWrong || 0) > 0 ||
         Boolean(w.reviewState?.pending);
 
-      return hasWrongHistory && lastWrongAt > 0 && lastWrongAt < todayStart;
+      return hasWrongHistory && lastWrongAt > 0 && lastWrongAt < todayStart && lastReviewedAt < todayStart;
     });
 
     return Math.min(
@@ -1084,6 +1087,51 @@ const shouldRebuildDeckRef = useRef(true);
     );
   }, [wrongPairSummary, reviewSummarySearch]);
 
+  const groupedWrongWordSummary = useMemo(() => {
+    const groups = new Map();
+    filteredWrongWordSummary.forEach((item) => {
+      const dateKey = item.lastWrongAt ? formatDate(item.lastWrongAt) : "未记录日期";
+      if (!groups.has(dateKey)) groups.set(dateKey, []);
+      groups.get(dateKey).push(item);
+    });
+    return Array.from(groups.entries()).map(([date, items]) => ({ date, items }));
+  }, [filteredWrongWordSummary]);
+
+  const groupedWrongPairSummary = useMemo(() => {
+    const groups = new Map();
+    filteredWrongPairSummary.forEach((item) => {
+      const dateKey = item.lastWrongAt ? formatDate(item.lastWrongAt) : "未记录日期";
+      if (!groups.has(dateKey)) groups.set(dateKey, []);
+      groups.get(dateKey).push(item);
+    });
+    return Array.from(groups.entries()).map(([date, items]) => ({ date, items }));
+  }, [filteredWrongPairSummary]);
+
+  const favoriteWordSummary = useMemo(() => {
+    return favoriteWords.map((w) => {
+      const firstSense = w.senses?.[0] || {};
+      return { id: w.id, word: w.word, meaning: w.shortMeaning || firstSense.zh || "", en: firstSense.en || "", tags: w.tags || [] };
+    });
+  }, [favoriteWords]);
+
+  const favoriteSenseSummary = useMemo(() => {
+    return words.flatMap((w) => (w.senses || []).filter((sense) => sense.favorite).map((sense) => ({
+      id: `${w.id}-${sense.id}`, wordId: w.id, senseId: sense.id, word: w.word, label: sense.label || "考点义", zh: sense.zh || "", en: sense.en || "", synonyms: sense.synonyms || [], antonyms: sense.antonyms || [],
+    })));
+  }, [words]);
+
+  const filteredFavoriteWordSummary = useMemo(() => {
+    const q = favoriteSummarySearch.trim().toLowerCase();
+    if (!q) return favoriteWordSummary;
+    return favoriteWordSummary.filter((item) => [item.word, item.meaning, item.en, ...(item.tags || [])].join(" | ").toLowerCase().includes(q));
+  }, [favoriteWordSummary, favoriteSummarySearch]);
+
+  const filteredFavoriteSenseSummary = useMemo(() => {
+    const q = favoriteSummarySearch.trim().toLowerCase();
+    if (!q) return favoriteSenseSummary;
+    return favoriteSenseSummary.filter((item) => [item.word, item.label, item.zh, item.en, ...(item.synonyms || []), ...(item.antonyms || [])].join(" | ").toLowerCase().includes(q));
+  }, [favoriteSenseSummary, favoriteSummarySearch]);
+
   const pairFrequencyStats = useMemo(() => ({
     sss: sixChoicePairs.filter((pair) => normalizeFrequency(pair.frequency) === "超超超高频").length,
     ss: sixChoicePairs.filter((pair) => normalizeFrequency(pair.frequency) === "超超高频").length,
@@ -1094,37 +1142,82 @@ const shouldRebuildDeckRef = useRef(true);
 
   const filteredWords = useMemo(() => {
     const now = Date.now();
-    const untouchedWords = words.filter((w) => w.stats.seen === 0 && (w.stats.quizCorrect || 0) === 0 && (w.stats.quizWrong || 0) === 0);
-    const todayTaskNewCount = Math.ceil((untouchedWords.length || words.length || 0) / Math.max(1, dailyPlan.wordFinishDays || 1));
+    const todayStart = getStartOfLocalDay(now);
+    const todayKeyForShuffle = formatDate(now);
+
+    const wasReviewedToday = (w) => (w.reviewState?.lastReviewedAt || 0) >= todayStart;
+    const wasWrongToday = (w) => (w.reviewState?.lastWrongAt || 0) >= todayStart;
+
+    const untouchedWords = words.filter(
+      (w) =>
+        !wasReviewedToday(w) &&
+        w.stats.seen === 0 &&
+        (w.stats.quizCorrect || 0) === 0 &&
+        (w.stats.quizWrong || 0) === 0
+    );
+
+    const todayTaskNewCount = Math.ceil(
+      (untouchedWords.length || words.length || 0) /
+        Math.max(1, dailyPlan.wordFinishDays || 1)
+    );
     const todayTaskReviewCount = Math.max(0, dailyPlan.wordReviewCount || 0);
-    const randomizedWrongWords = shuffleArray(wrongWordBook);
+
+    const eligibleReviewWords = wrongWordBook.filter((w) => {
+      const lastWrongAt = w.reviewState?.lastWrongAt || 0;
+      const hasWrongHistory =
+        (w.stats?.unknown || 0) > 0 ||
+        (w.stats?.quizWrong || 0) > 0 ||
+        Boolean(w.reviewState?.pending);
+
+      return hasWrongHistory && lastWrongAt > 0 && lastWrongAt < todayStart && !wasReviewedToday(w) && !wasWrongToday(w);
+    });
+
+    const randomizedWrongWords = seededShuffleArray(
+      eligibleReviewWords,
+      `${todayKeyForShuffle}-${shuffleSeed}-review`
+    );
+
+    const randomizedNewWords =
+      orderMode === "ordered"
+        ? untouchedWords
+        : seededShuffleArray(untouchedWords, `${todayKeyForShuffle}-${shuffleSeed}-new`);
 
     let base = [...words];
+    let keepCurrentOrder = false;
+
     if (mode === "wrong") base = wrongWordBook;
     if (mode === "stubborn") base = stubbornWordBook;
     if (mode === "favorite_words") base = words.filter((w) => w.favorite);
     if (mode === "favorite_senses") base = words.filter((w) => w.senses.some((s) => s.favorite));
-    if (mode === "new") base = untouchedWords;
+    if (mode === "new") {
+      base = randomizedNewWords;
+      keepCurrentOrder = true;
+    }
     if (mode === "hard") base = words.filter((w) => w.senses.length >= 2 || (w.stats.unknown || 0) >= 2 || (w.stats.quizWrong || 0) >= 2);
 
     if (flashcardFilter === "review") {
       base = randomizedWrongWords.slice(0, todayTaskReviewCount);
+      keepCurrentOrder = true;
     }
 
     if (flashcardFilter === "task") {
       const reviewSlice = randomizedWrongWords.slice(0, todayTaskReviewCount);
       const reviewIds = new Set(reviewSlice.map((w) => w.id));
-      const newSlice = untouchedWords.filter((w) => !reviewIds.has(w.id)).slice(0, todayTaskNewCount);
-      const taskIds = new Set([...reviewSlice, ...newSlice].map((w) => w.id));
-      base = words.filter((w) => taskIds.has(w.id));
+      const newSlice = randomizedNewWords
+        .filter((w) => !reviewIds.has(w.id))
+        .slice(0, todayTaskNewCount);
+      base = [...reviewSlice, ...newSlice];
+      keepCurrentOrder = true;
     }
 
     if (flashcardFilter === "today_new") {
-      base = untouchedWords.slice(0, todayTaskNewCount);
+      base = randomizedNewWords.slice(0, todayTaskNewCount);
+      keepCurrentOrder = true;
     }
 
     if (flashcardFilter === "new") {
-      base = untouchedWords;
+      base = randomizedNewWords;
+      keepCurrentOrder = true;
     }
 
     const q = search.trim().toLowerCase();
@@ -1138,7 +1231,9 @@ const shouldRebuildDeckRef = useRef(true);
       ].join(" | ").toLowerCase().includes(q));
     }
 
-    return base.sort((a, b) => {
+    if (keepCurrentOrder) return base;
+
+    return [...base].sort((a, b) => {
       const pendingDelta = Number(Boolean(b.reviewState?.pending)) - Number(Boolean(a.reviewState?.pending));
       if (pendingDelta) return pendingDelta;
       const priorityDelta = (b.reviewState?.priority || 0) - (a.reviewState?.priority || 0);
@@ -1423,8 +1518,6 @@ function recordFlashcardResult(
     setFlashcardFilter(options.filter || "all");
     setFlashcardMode(options.flashcardMode || "recognition");
     setCurrentIndex(0);
-    setFlashcardCompleteMessage("");
-    setSessionOrderIds([]);
     setFlipped(false);
     setRevealLevel(0);
     setRetrievalInput("");
@@ -2270,153 +2363,6 @@ function recordFlashcardResult(
             )}
 
             <Card className="rounded-2xl shadow-sm">
-              <CardHeader className="space-y-4">
-                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                  <CardTitle className="flex items-center gap-2 text-lg">
-                    <Brain className="h-5 w-5" />
-                    错题汇总
-                  </CardTitle>
-
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="rounded-full"
-                      onClick={() => {
-                          track("open_wrong_book_words", { wrong_count: wrongWordSummary.length });
-                          openFlashcardDeck("wrong", { filter: "all", flashcardMode: "recognition" });
-                        }}
-                    >
-                      去刷单词错题
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="rounded-full"
-                      onClick={() => {
-                        setStudyView("quiz");
-                        setQuizMode("bb_pairs");
-                        setPairReviewMode("wrong");
-                      }}
-                    >
-                      去刷六选二错题
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="rounded-full"
-                      onClick={() => {
-                        if (reviewSummaryTab === "words") clearAllWrongWords();
-                        else clearAllWrongPairs();
-                      }}
-                      disabled={reviewSummaryTab === "words" ? !wrongWordSummary.length : !wrongPairSummary.length}
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      清空当前错题表
-                    </Button>
-                  </div>
-                </div>
-
-                <Tabs value={reviewSummaryTab} onValueChange={setReviewSummaryTab} className="w-full">
-                  <TabsList className="grid w-full grid-cols-2 gap-2 h-auto bg-transparent p-0">
-                    <TabsTrigger value="words" className="rounded-xl border px-3 py-2">
-                      单词错题表（{wrongWordSummary.length}）
-                    </TabsTrigger>
-                    <TabsTrigger value="pairs" className="rounded-xl border px-3 py-2">
-                      六选二错题表（{wrongPairSummary.length}）
-                    </TabsTrigger>
-                  </TabsList>
-                </Tabs>
-
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <Input
-                    value={reviewSummarySearch}
-                    onChange={(e) => setReviewSummarySearch(e.target.value)}
-                    placeholder={reviewSummaryTab === "words" ? "搜索单词 / 中文义 / 英文义..." : "搜索词对 / 中文释义 / 频率 / 来源..."}
-                    className="rounded-2xl pl-9"
-                  />
-                </div>
-              </CardHeader>
-
-              <CardContent>
-                {reviewSummaryTab === "words" ? (
-                  filteredWrongWordSummary.length ? (
-                    <div className="space-y-2">
-                      {filteredWrongWordSummary.map((item, index) => (
-                        <div key={item.id} className="rounded-2xl border bg-slate-50 px-4 py-3">
-                          <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                            <div className="min-w-0">
-                              <div className="text-base font-semibold">
-                                {index + 1}. {item.word}
-                              </div>
-                              <div className="mt-1 text-sm text-slate-700">{item.meaning || "未填写中文义"}</div>
-                              {item.en ? <div className="mt-1 text-xs text-slate-500">{item.en}</div> : null}
-                            </div>
-
-                            <div className="flex flex-wrap items-center gap-2">
-                              <Badge variant="outline">总错 {item.totalWrong}</Badge>
-                              <Badge variant="outline">闪卡不认识 {item.unknownCount}</Badge>
-                              <Badge variant="outline">Quiz 错误 {item.quizWrongCount}</Badge>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="rounded-full"
-                                onClick={() => clearWrongWordRecord(item.id)}
-                              >
-                                <Trash2 className="mr-2 h-4 w-4" />
-                                清空这条
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="rounded-2xl border border-dashed px-4 py-8 text-center text-sm text-slate-500">
-                      这里还没有单词错题。
-                    </div>
-                  )
-                ) : filteredWrongPairSummary.length ? (
-                  <div className="space-y-2">
-                    {filteredWrongPairSummary.map((item, index) => (
-                      <div key={item.id} className="rounded-2xl border bg-slate-50 px-4 py-3">
-                        <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                          <div className="min-w-0">
-                            <div className="text-base font-semibold">
-                              {index + 1}. {item.a} = {item.b}
-                            </div>
-                            <div className="mt-1 text-sm text-slate-700">{item.zh || "未填写中文释义"}</div>
-                            <div className="mt-1 text-xs text-slate-500">
-                              {[item.frequency, item.source].filter(Boolean).join(" · ")}
-                            </div>
-                          </div>
-
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Badge variant="outline">错误次数 {item.wrongCount}</Badge>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="rounded-full"
-                              onClick={() => clearWrongPairRecord(item.id)}
-                            >
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              清空这条
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="rounded-2xl border border-dashed px-4 py-8 text-center text-sm text-slate-500">
-                    这里还没有六选二错题。
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card className="rounded-2xl shadow-sm">
               <CardHeader>
                 <CardTitle className="text-lg">今日计划模块</CardTitle>
               </CardHeader>
@@ -2482,6 +2428,175 @@ function recordFlashcardResult(
                       <div>{todayQuizAccuracy === null ? "今天至少做一轮 quiz，才能判断是否达标。" : todayQuizAccuracy >= dailyPlan.quizTarget ? "今天 quiz 准确率已达标。" : `今天 quiz 还没到目标，还差 ${dailyPlan.quizTarget - todayQuizAccuracy}%`}</div>
                     </div>
                   </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="rounded-2xl shadow-sm">
+              <CardHeader className="space-y-4">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <CardTitle className="flex items-center gap-2 text-lg">
+                    <Brain className="h-5 w-5" />
+                    错题汇总
+                  </CardTitle>
+
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => { track("open_wrong_book_words", { wrong_count: wrongWordSummary.length }); openFlashcardDeck("wrong", { filter: "all", flashcardMode: "recognition" }); }}>
+                      去刷单词错题
+                    </Button>
+                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => { setStudyView("quiz"); setQuizMode("bb_pairs"); setPairReviewMode("wrong"); }}>
+                      去刷六选二错题
+                    </Button>
+                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => { if (reviewSummaryTab === "words") clearAllWrongWords(); else clearAllWrongPairs(); }} disabled={reviewSummaryTab === "words" ? !wrongWordSummary.length : !wrongPairSummary.length}>
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      清空当前错题表
+                    </Button>
+                  </div>
+                </div>
+
+                <Tabs value={reviewSummaryTab} onValueChange={setReviewSummaryTab} className="w-full">
+                  <TabsList className="grid w-full grid-cols-2 gap-2 h-auto bg-transparent p-0">
+                    <TabsTrigger value="words" className="rounded-xl border px-3 py-2">单词错题表（{wrongWordSummary.length}）</TabsTrigger>
+                    <TabsTrigger value="pairs" className="rounded-xl border px-3 py-2">六选二错题表（{wrongPairSummary.length}）</TabsTrigger>
+                  </TabsList>
+                </Tabs>
+
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <Input value={reviewSummarySearch} onChange={(e) => setReviewSummarySearch(e.target.value)} placeholder={reviewSummaryTab === "words" ? "搜索单词 / 中文义 / 英文义..." : "搜索词对 / 中文释义 / 频率 / 来源..."} className="rounded-2xl pl-9" />
+                </div>
+              </CardHeader>
+
+              <CardContent>
+                <div className="max-h-[430px] overflow-y-auto pr-2">
+                  {reviewSummaryTab === "words" ? (
+                    groupedWrongWordSummary.length ? (
+                      <div className="space-y-3">
+                        {groupedWrongWordSummary.map((group) => (
+                          <details key={group.date} open className="rounded-2xl border bg-white">
+                            <summary className="cursor-pointer select-none rounded-2xl bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">{group.date} · {group.items.length} 个单词错题</summary>
+                            <div className="space-y-2 p-3">
+                              {group.items.map((item, index) => (
+                                <div key={item.id} className="rounded-2xl border bg-slate-50 px-4 py-3">
+                                  <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                                    <div className="min-w-0">
+                                      <div className="text-base font-semibold">{index + 1}. {item.word}</div>
+                                      <div className="mt-1 text-sm text-slate-700">{item.meaning || "未填写中文义"}</div>
+                                      {item.en ? <div className="mt-1 text-xs text-slate-500">{item.en}</div> : null}
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <Badge variant="outline">总错 {item.totalWrong}</Badge>
+                                      <Badge variant="outline">闪卡不认识 {item.unknownCount}</Badge>
+                                      <Badge variant="outline">Quiz 错误 {item.quizWrongCount}</Badge>
+                                      <Button variant="outline" size="sm" className="rounded-full" onClick={() => clearWrongWordRecord(item.id)}><Trash2 className="mr-2 h-4 w-4" />清空这条</Button>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-dashed px-4 py-8 text-center text-sm text-slate-500">这里还没有单词错题。</div>
+                    )
+                  ) : groupedWrongPairSummary.length ? (
+                    <div className="space-y-3">
+                      {groupedWrongPairSummary.map((group) => (
+                        <details key={group.date} open className="rounded-2xl border bg-white">
+                          <summary className="cursor-pointer select-none rounded-2xl bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">{group.date} · {group.items.length} 组六选二错题</summary>
+                          <div className="space-y-2 p-3">
+                            {group.items.map((item, index) => (
+                              <div key={item.id} className="rounded-2xl border bg-slate-50 px-4 py-3">
+                                <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                                  <div className="min-w-0">
+                                    <div className="text-base font-semibold">{index + 1}. {item.a} = {item.b}</div>
+                                    <div className="mt-1 text-sm text-slate-700">{item.zh || "未填写中文释义"}</div>
+                                    <div className="mt-1 text-xs text-slate-500">{[item.frequency, item.source].filter(Boolean).join(" · ")}</div>
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <Badge variant="outline">错误次数 {item.wrongCount}</Badge>
+                                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => clearWrongPairRecord(item.id)}><Trash2 className="mr-2 h-4 w-4" />清空这条</Button>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed px-4 py-8 text-center text-sm text-slate-500">这里还没有六选二错题。</div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="rounded-2xl shadow-sm">
+              <CardHeader className="space-y-4">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <CardTitle className="flex items-center gap-2 text-lg"><Heart className="h-5 w-5" />收藏汇总</CardTitle>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => openFlashcardDeck("favorite_words", { filter: "all", flashcardMode })}>去刷收藏单词</Button>
+                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => openFlashcardDeck("favorite_senses", { filter: "all", flashcardMode })}>去刷收藏词义</Button>
+                  </div>
+                </div>
+
+                <Tabs value={favoriteSummaryTab} onValueChange={setFavoriteSummaryTab} className="w-full">
+                  <TabsList className="grid w-full grid-cols-2 gap-2 h-auto bg-transparent p-0">
+                    <TabsTrigger value="words" className="rounded-xl border px-3 py-2">单词收藏（{favoriteWordSummary.length}）</TabsTrigger>
+                    <TabsTrigger value="senses" className="rounded-xl border px-3 py-2">词义收藏（{favoriteSenseSummary.length}）</TabsTrigger>
+                  </TabsList>
+                </Tabs>
+
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <Input value={favoriteSummarySearch} onChange={(e) => setFavoriteSummarySearch(e.target.value)} placeholder={favoriteSummaryTab === "words" ? "搜索收藏单词 / 中文义 / 英文义..." : "搜索收藏词义 / 同义词 / 反义词..."} className="rounded-2xl pl-9" />
+                </div>
+              </CardHeader>
+
+              <CardContent>
+                <div className="max-h-[360px] overflow-y-auto pr-2">
+                  {favoriteSummaryTab === "words" ? (
+                    filteredFavoriteWordSummary.length ? (
+                      <div className="space-y-2">
+                        {filteredFavoriteWordSummary.map((item, index) => (
+                          <div key={item.id} className="rounded-2xl border bg-slate-50 px-4 py-3">
+                            <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                              <div className="min-w-0">
+                                <div className="text-base font-semibold">{index + 1}. {item.word}</div>
+                                <div className="mt-1 text-sm text-slate-700">{item.meaning || "未填写中文义"}</div>
+                                {item.en ? <div className="mt-1 text-xs text-slate-500">{item.en}</div> : null}
+                              </div>
+                              <Button variant="outline" size="sm" className="rounded-full" onClick={() => toggleFavoriteWord(item.id)}><Heart className="mr-2 h-4 w-4 fill-current text-rose-500" />取消收藏</Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-dashed px-4 py-8 text-center text-sm text-slate-500">这里还没有收藏单词。</div>
+                    )
+                  ) : filteredFavoriteSenseSummary.length ? (
+                    <div className="space-y-2">
+                      {filteredFavoriteSenseSummary.map((item, index) => (
+                        <div key={item.id} className="rounded-2xl border bg-slate-50 px-4 py-3">
+                          <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                            <div className="min-w-0">
+                              <div className="text-base font-semibold">{index + 1}. {item.word} · {item.label}</div>
+                              <div className="mt-1 text-sm text-slate-700">{item.zh || "未填写中文义"}</div>
+                              {item.en ? <div className="mt-1 text-xs text-slate-500">{item.en}</div> : null}
+                              <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
+                                {(item.synonyms || []).slice(0, 6).map((syn) => <Badge key={syn} variant="outline">近 {syn}</Badge>)}
+                                {(item.antonyms || []).slice(0, 4).map((ant) => <Badge key={ant} variant="outline">反 {ant}</Badge>)}
+                              </div>
+                            </div>
+                            <Button variant="outline" size="sm" className="rounded-full" onClick={() => toggleFavoriteSense(item.wordId, item.senseId)}><Heart className="mr-2 h-4 w-4 fill-current text-rose-500" />取消收藏</Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed px-4 py-8 text-center text-sm text-slate-500">这里还没有收藏词义。</div>
+                  )}
                 </div>
               </CardContent>
             </Card>

@@ -1079,24 +1079,29 @@ const shouldRebuildDeckRef = useRef(true);
   const wrongWordBook = useMemo(() => words.filter((w) => (w.stats?.unknown || 0) > 0 || (w.stats?.quizWrong || 0) > 0), [words]);
 
   const todayReviewTargetActual = useMemo(() => {
-    const todayStart = getStartOfLocalDay(Date.now());
+  const now = Date.now();
+  const todayStart = getStartOfLocalDay(now);
+  const todayKeyForReview = formatDate(now);
+  const todayReviewedCount = dailyStats[todayKeyForReview]?.reviewReviewed || 0;
 
-    const eligibleReviewWords = wrongWordBook.filter((w) => {
-      const lastWrongAt = w.reviewState?.lastWrongAt || 0;
-      const lastReviewedAt = w.reviewState?.lastReviewedAt || 0;
-      const hasWrongHistory =
-        (w.stats?.unknown || 0) > 0 ||
-        (w.stats?.quizWrong || 0) > 0 ||
-        Boolean(w.reviewState?.pending);
+  const eligibleReviewWords = wrongWordBook.filter((w) => {
+    const lastWrongAt = w.reviewState?.lastWrongAt || 0;
+    const lastReviewedAt = w.reviewState?.lastReviewedAt || 0;
+    const hasWrongHistory =
+      (w.stats?.unknown || 0) > 0 ||
+      (w.stats?.quizWrong || 0) > 0 ||
+      Boolean(w.reviewState?.pending);
 
-      return hasWrongHistory && lastWrongAt > 0 && lastWrongAt < todayStart && lastReviewedAt < todayStart;
-    });
+    return hasWrongHistory && lastWrongAt > 0 && lastWrongAt < todayStart && lastReviewedAt < todayStart;
+  });
 
-    return Math.min(
-      eligibleReviewWords.length,
-      Math.max(0, dailyPlan.wordReviewCount || 0)
-    );
-  }, [wrongWordBook, dailyPlan.wordReviewCount]);
+  const reviewAvailableAtDayStart = eligibleReviewWords.length + todayReviewedCount;
+  const plannedReviewCount = Math.max(0, dailyPlan.wordReviewCount || 0);
+
+  return Math.min(plannedReviewCount, reviewAvailableAtDayStart);
+}, [wrongWordBook, dailyPlan.wordReviewCount, dailyStats]);
+
+
   const stubbornWordBook = useMemo(() => words.filter((w) => (w.reviewState?.priority || 0) >= 4 || (w.reviewState?.wrongStreak || 0) >= 2), [words]);
   const favoriteWords = useMemo(() => words.filter((w) => w.favorite), [words]);
   const favoriteSenseCount = useMemo(() => words.reduce((sum, w) => sum + w.senses.filter((s) => s.favorite).length, 0), [words]);
@@ -1212,6 +1217,9 @@ const shouldRebuildDeckRef = useRef(true);
     const now = Date.now();
     const todayStart = getStartOfLocalDay(now);
     const todayKeyForShuffle = formatDate(now);
+    const todayStatForDeck = dailyStats[todayKeyForShuffle] || {};
+    const todayNewReviewedForDeck = todayStatForDeck.newReviewed || 0;
+    const todayReviewReviewedForDeck = todayStatForDeck.reviewReviewed || 0;
 
     const wasReviewedToday = (w) => (w.reviewState?.lastReviewedAt || 0) >= todayStart;
     const wasWrongToday = (w) => (w.reviewState?.lastWrongAt || 0) >= todayStart;
@@ -1224,11 +1232,21 @@ const shouldRebuildDeckRef = useRef(true);
         (w.stats.quizWrong || 0) === 0
     );
 
-    const todayTaskNewCount = Math.ceil(
-      (untouchedWords.length || words.length || 0) /
-        Math.max(1, dailyPlan.wordFinishDays || 1)
-    );
-    const todayTaskReviewCount = Math.max(0, dailyPlan.wordReviewCount || 0);
+    const fixedTodayTaskNewCount = Math.ceil(
+  (words.length || 0) / Math.max(1, dailyPlan.wordFinishDays || 1)
+);
+
+const todayTaskNewTarget = Math.min(
+  fixedTodayTaskNewCount,
+  untouchedWords.length + todayNewReviewedForDeck
+);
+
+const todayTaskNewRemaining = Math.max(
+  0,
+  todayTaskNewTarget - todayNewReviewedForDeck
+);
+
+const plannedReviewCount = Math.max(0, dailyPlan.wordReviewCount || 0);
 
     const eligibleReviewWords = wrongWordBook.filter((w) => {
       const lastWrongAt = w.reviewState?.lastWrongAt || 0;
@@ -1239,6 +1257,16 @@ const shouldRebuildDeckRef = useRef(true);
 
       return hasWrongHistory && lastWrongAt > 0 && lastWrongAt < todayStart && !wasReviewedToday(w) && !wasWrongToday(w);
     });
+
+    const todayTaskReviewTarget = Math.min(
+  plannedReviewCount,
+  eligibleReviewWords.length + todayReviewReviewedForDeck
+);
+
+const todayTaskReviewRemaining = Math.max(
+  0,
+  todayTaskReviewTarget - todayReviewReviewedForDeck
+);
 
     const randomizedWrongWords = seededShuffleArray(
       eligibleReviewWords,
@@ -1264,22 +1292,22 @@ const shouldRebuildDeckRef = useRef(true);
     if (mode === "hard") base = words.filter((w) => w.senses.length >= 2 || (w.stats.unknown || 0) >= 2 || (w.stats.quizWrong || 0) >= 2);
 
     if (flashcardFilter === "review") {
-      base = randomizedWrongWords.slice(0, todayTaskReviewCount);
+      base = randomizedWrongWords.slice(0, todayTaskReviewRemaining);
       keepCurrentOrder = true;
     }
 
     if (flashcardFilter === "task") {
-      const reviewSlice = randomizedWrongWords.slice(0, todayTaskReviewCount);
+      const reviewSlice = randomizedWrongWords.slice(0, todayTaskReviewRemaining);
       const reviewIds = new Set(reviewSlice.map((w) => w.id));
       const newSlice = randomizedNewWords
         .filter((w) => !reviewIds.has(w.id))
-        .slice(0, todayTaskNewCount);
+        .slice(0, todayTaskNewRemaining);
       base = [...reviewSlice, ...newSlice];
       keepCurrentOrder = true;
     }
 
     if (flashcardFilter === "today_new") {
-      base = randomizedNewWords.slice(0, todayTaskNewCount);
+      base = randomizedNewWords.slice(0, todayTaskNewRemaining);
       keepCurrentOrder = true;
     }
 
@@ -1308,7 +1336,19 @@ const shouldRebuildDeckRef = useRef(true);
       if (priorityDelta) return priorityDelta;
       return (b.reviewState?.lastWrongAt || 0) - (a.reviewState?.lastWrongAt || 0);
     });
-  }, [words, wrongWordBook, stubbornWordBook, mode, flashcardFilter, search, dailyPlan.wordFinishDays, dailyPlan.wordReviewCount, shuffleSeed, orderMode]);
+ }, [
+  words,
+  wrongWordBook,
+  stubbornWordBook,
+  mode,
+  flashcardFilter,
+  search,
+  dailyPlan.wordFinishDays,
+  dailyPlan.wordReviewCount,
+  shuffleSeed,
+  orderMode,
+  dailyStats,
+]);
 
   const filteredPairs = useMemo(() => {
     let base = sixChoicePairs;
@@ -1447,7 +1487,16 @@ const shouldRebuildDeckRef = useRef(true);
   setRetrievalInput("");
 
   shouldRebuildDeckRef.current = false;
-}, [words.length, orderMode, shuffleSeed, mode, flashcardFilter, search, storageReady]);
+}, [
+  filteredWordMembershipSignature,
+  words.length,
+  orderMode,
+  shuffleSeed,
+  mode,
+  flashcardFilter,
+  search,
+  storageReady,
+]);
 
   const sessionOrder = useMemo(() => {
     if (!sessionOrderIds.length) return [];
@@ -2167,10 +2216,18 @@ function nextQuizQuestion() {
   }
 
   const dueCount = words.filter((w) => (w.srs?.due || 0) <= Date.now()).length;
+  
   const newWordCount = words.filter((w) => w.stats.seen === 0 && (w.stats.quizCorrect || 0) === 0 && (w.stats.quizWrong || 0) === 0).length;
   const pairNewCount = sixChoicePairs.filter((pair) => (pair.stats?.seen || 0) === 0).length;
-  const dailyWordNewTarget = Math.ceil((newWordCount || words.length || 0) / Math.max(1, dailyPlan.wordFinishDays || 1));
-  const dailyPairNewTarget = Math.ceil((pairNewCount || sixChoicePairs.length || 0) / Math.max(1, dailyPlan.pairFinishDays || 1));
+
+  const dailyWordNewTargetBase = Math.ceil(
+  (words.length || 0) / Math.max(1, dailyPlan.wordFinishDays || 1)
+);
+
+  const dailyPairNewTarget = Math.ceil(
+  (pairNewCount || sixChoicePairs.length || 0) / Math.max(1, dailyPlan.pairFinishDays || 1)
+  );
+  
   const todayKey = formatDate(Date.now());
   const todayStat = dailyStats[todayKey] || {};
   const studyLogDates = useMemo(() => Object.keys(dailyStudyLogs || {}).sort((a, b) => b.localeCompare(a)), [dailyStudyLogs]);
@@ -2192,6 +2249,10 @@ function nextQuizQuestion() {
       .filter(([, day]) => (studyLogTab === "words" ? day.words.length : day.pairs.length));
   }, [dailyStudyLogs, studyLogDates, studyLogSearch, studyLogTab]);
   const todayNewWordStudyCount = todayStat.newReviewed || 0;
+  const dailyWordNewTarget = Math.min(
+  dailyWordNewTargetBase,
+  newWordCount + todayNewWordStudyCount
+);
   const todayReviewWordStudyCount = todayStat.reviewReviewed || 0;
   const todayWordStudyCount = todayStat.reviewed || 0;
   const todayPairPracticeCount = (todayStat.bbPairCorrect || 0) + (todayStat.bbPairWrong || 0);

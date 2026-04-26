@@ -1984,48 +1984,150 @@ function recordFlashcardResult(
   }
 
   const dueCount = words.filter((w) => (w.srs?.due || 0) <= Date.now()).length;
-  const newWordCount = words.filter((w) => w.stats.seen === 0 && (w.stats.quizCorrect || 0) === 0 && (w.stats.quizWrong || 0) === 0).length;
-  const pairNewCount = sixChoicePairs.filter((pair) => (pair.stats?.seen || 0) === 0).length;
-  const dailyWordNewTarget = Math.ceil((newWordCount || words.length || 0) / Math.max(1, dailyPlan.wordFinishDays || 1));
-  const dailyPairNewTarget = Math.ceil((pairNewCount || sixChoicePairs.length || 0) / Math.max(1, dailyPlan.pairFinishDays || 1));
-  const todayKey = formatDate(Date.now());
-  const todayStat = dailyStats[todayKey] || {};
+  const newWordCount = words.filter(
+  (w) =>
+    w.stats.seen === 0 &&
+    (w.stats.quizCorrect || 0) === 0 &&
+    (w.stats.quizWrong || 0) === 0
+  ).length;
+  const pairNewCount = sixChoicePairs.filter(
+    (pair) => (pair.stats?.seen || 0) === 0
+  ).length;
+
+  const todayStatsKey = formatDate(Date.now());
+  const todayStat = dailyStats[todayStatsKey] || {};
+
   const todayNewWordStudyCount = todayStat.newReviewed || 0;
   const todayReviewWordStudyCount = todayStat.reviewReviewed || 0;
   const todayWordStudyCount = todayStat.reviewed || 0;
-  const todayPairPracticeCount = (todayStat.bbPairCorrect || 0) + (todayStat.bbPairWrong || 0);
-  const todayQuizCount = (todayStat.quizCorrect || 0) + (todayStat.quizWrong || 0);
-  const todayQuizAccuracy = todayQuizCount ? Math.round(((todayStat.quizCorrect || 0) / todayQuizCount) * 100) : null;
-  const todayNewWordTarget = dailyWordNewTarget;
+
+  const todayPairPracticeCount =
+  (todayStat.bbPairCorrect || 0) + (todayStat.bbPairWrong || 0);
+  
+  const todayQuizCount =
+  (todayStat.quizCorrect || 0) + (todayStat.quizWrong || 0);
+  const todayQuizAccuracy = todayQuizCount
+  ? Math.round(((todayStat.quizCorrect || 0) / todayQuizCount) * 100)
+  : null;
+
+// 固定节奏：按总词库 / 完成天数，而不是剩余词 / 完成天数
+  const dailyWordNewTarget = Math.ceil(
+    (words.length || 0) / Math.max(1, dailyPlan.wordFinishDays || 1)
+  );
+
+  const dailyPairNewTarget = Math.ceil(
+    (sixChoicePairs.length || 0) / Math.max(1, dailyPlan.pairFinishDays || 1)
+  );
+
+// 今日新词目标：平时固定，最后剩余不够时自然减少
+  const todayNewWordTarget = Math.min(
+    dailyWordNewTarget,
+    newWordCount + todayNewWordStudyCount
+  );
+
+// 今日复习目标：今天开始时实际可复习错题数，不随着今天已经复习而减少
   const todayReviewWordTarget = todayReviewTargetActual;
+
   const todayWordTarget = todayNewWordTarget + todayReviewWordTarget;
   const todayPairTarget = dailyPairNewTarget + dailyPlan.pairReviewCount;
-  const todayNewWordRemaining = Math.max(0, todayNewWordTarget - todayNewWordStudyCount);
-  const todayReviewWordRemaining = Math.max(0, todayReviewWordTarget - todayReviewWordStudyCount);
+
+  const todayNewWordRemaining = Math.max(
+    0,
+    todayNewWordTarget - todayNewWordStudyCount
+  );
+
+  const todayReviewWordRemaining = Math.max(
+    0,
+    todayReviewWordTarget - todayReviewWordStudyCount
+  );
+
   const todayWordRemaining = todayNewWordRemaining + todayReviewWordRemaining;
-  const todayPairRemaining = Math.max(0, todayPairTarget - todayPairPracticeCount);
-  const todayNewWordProgressPct = todayNewWordTarget ? Math.min(100, Math.round((todayNewWordStudyCount / todayNewWordTarget) * 100)) : 100;
-  const todayReviewWordProgressPct = todayReviewWordTarget ? Math.min(100, Math.round((todayReviewWordStudyCount / todayReviewWordTarget) * 100)) : 100;
-  const todayWordProgressPct = todayWordTarget ? Math.min(100, Math.round((todayWordStudyCount / todayWordTarget) * 100)) : 100;
-  const todayPairProgressPct = todayPairTarget ? Math.min(100, Math.round((todayPairPracticeCount / todayPairTarget) * 100)) : 0;
-  const todayQuizProgressPct = todayQuizAccuracy === null ? 0 : Math.min(100, Math.round((todayQuizAccuracy / Math.max(1, dailyPlan.quizTarget)) * 100));
-  const wrongCount = wrongWordBook.length;
-  const newWordPlanStatus = todayNewWordRemaining === 0 ? "done" : todayNewWordProgressPct >= 70 ? "warning" : "pending";
-  const reviewWordPlanStatus = todayReviewWordRemaining === 0 ? "done" : todayReviewWordProgressPct >= 70 ? "warning" : "pending";
-  const wordPlanStatus = todayWordRemaining === 0 ? "done" : todayWordProgressPct >= 70 ? "warning" : "pending";
-  const pairPlanStatus = todayPairRemaining === 0 ? "done" : todayPairProgressPct >= 70 ? "warning" : "pending";
-  const quizPlanStatus = todayQuizAccuracy === null ? "pending" : todayQuizAccuracy >= dailyPlan.quizTarget ? "done" : todayQuizAccuracy >= Math.max(0, dailyPlan.quizTarget - 10) ? "warning" : "pending";
-  const overallPlanStatus = [wordPlanStatus, pairPlanStatus, quizPlanStatus].every((status) => status === "done")
+
+  const todayPairRemaining = Math.max(
+    0,
+    todayPairTarget - todayPairPracticeCount
+  );
+
+  const todayNewWordProgressPct = todayNewWordTarget
+    ? Math.min(100, Math.round((todayNewWordStudyCount / todayNewWordTarget) * 100))
+    : 100;
+
+  const todayReviewWordProgressPct = todayReviewWordTarget
+    ? Math.min(100, Math.round((todayReviewWordStudyCount / todayReviewWordTarget) * 100))
+    : 100;
+
+  const todayWordProgressPct = todayWordTarget
+    ? Math.min(100, Math.round((todayWordStudyCount / todayWordTarget) * 100))
+    : 100;
+
+  const todayPairProgressPct = todayPairTarget
+    ? Math.min(100, Math.round((todayPairPracticeCount / todayPairTarget) * 100))
+    : 0;
+
+  const todayQuizProgressPct =
+    todayQuizAccuracy === null
+      ? 0
+      : Math.min(
+        100,
+        Math.round((todayQuizAccuracy / Math.max(1, dailyPlan.quizTarget)) * 100)
+        );
+
+const wrongCount = wrongWordBook.length;
+
+const newWordPlanStatus =
+  todayNewWordRemaining === 0
     ? "done"
-    : [wordPlanStatus, pairPlanStatus, quizPlanStatus].some((status) => status === "warning" || status === "done")
+    : todayNewWordProgressPct >= 70
       ? "warning"
       : "pending";
-  const overallPlanMeta = getPlanStatusMeta(overallPlanStatus);
-  const wordPlanMeta = getPlanStatusMeta(wordPlanStatus);
-  const newWordPlanMeta = getPlanStatusMeta(newWordPlanStatus);
-  const reviewWordPlanMeta = getPlanStatusMeta(reviewWordPlanStatus);
-  const pairPlanMeta = getPlanStatusMeta(pairPlanStatus);
-  const quizPlanMeta = getPlanStatusMeta(quizPlanStatus);
+
+const reviewWordPlanStatus =
+  todayReviewWordTarget === 0 || todayReviewWordRemaining === 0
+    ? "done"
+    : todayReviewWordProgressPct >= 70
+      ? "warning"
+      : "pending";
+
+const wordPlanStatus =
+  todayWordRemaining === 0
+    ? "done"
+    : todayWordProgressPct >= 70
+      ? "warning"
+      : "pending";
+
+const pairPlanStatus =
+  todayPairRemaining === 0
+    ? "done"
+    : todayPairProgressPct >= 70
+      ? "warning"
+      : "pending";
+
+const quizPlanStatus =
+  todayQuizAccuracy === null
+    ? "pending"
+    : todayQuizAccuracy >= dailyPlan.quizTarget
+      ? "done"
+      : todayQuizAccuracy >= Math.max(0, dailyPlan.quizTarget - 10)
+        ? "warning"
+        : "pending";
+
+const overallPlanStatus =
+  [newWordPlanStatus, reviewWordPlanStatus, pairPlanStatus, quizPlanStatus].every(
+    (status) => status === "done"
+  )
+    ? "done"
+    : [newWordPlanStatus, reviewWordPlanStatus, pairPlanStatus, quizPlanStatus].some(
+        (status) => status === "warning" || status === "done"
+      )
+      ? "warning"
+      : "pending";
+
+const overallPlanMeta = getPlanStatusMeta(overallPlanStatus);
+const wordPlanMeta = getPlanStatusMeta(wordPlanStatus);
+const newWordPlanMeta = getPlanStatusMeta(newWordPlanStatus);
+const reviewWordPlanMeta = getPlanStatusMeta(reviewWordPlanStatus);
+const pairPlanMeta = getPlanStatusMeta(pairPlanStatus);
+const quizPlanMeta = getPlanStatusMeta(quizPlanStatus);
   
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-8">

@@ -1012,23 +1012,20 @@ const shouldRebuildDeckRef = useRef(true);
 
   const todayReviewTargetActual = useMemo(() => {
     const todayStart = getStartOfLocalDay(Date.now());
-
-    const eligibleReviewWords = wrongWordBook.filter((w) => {
+    const reviewWordsAvailableAtStartOfDay = wrongWordBook.filter((w) => {
       const lastWrongAt = w.reviewState?.lastWrongAt || 0;
-      const lastReviewedAt = w.reviewState?.lastReviewedAt || 0;
       const hasWrongHistory =
-        (w.stats?.unknown || 0) > 0 ||
-        (w.stats?.quizWrong || 0) > 0 ||
-        Boolean(w.reviewState?.pending);
-
-      return hasWrongHistory && lastWrongAt > 0 && lastWrongAt < todayStart && lastReviewedAt < todayStart;
+      (w.stats?.unknown || 0) > 0 ||
+      (w.stats?.quizWrong || 0) > 0 ||
+      Boolean(w.reviewState?.pending);
+      return hasWrongHistory && lastWrongAt > 0 && lastWrongAt < todayStart;
     });
-
     return Math.min(
-      eligibleReviewWords.length,
+      reviewWordsAvailableAtStartOfDay.length,
       Math.max(0, dailyPlan.wordReviewCount || 0)
     );
   }, [wrongWordBook, dailyPlan.wordReviewCount]);
+
   const stubbornWordBook = useMemo(() => words.filter((w) => (w.reviewState?.priority || 0) >= 4 || (w.reviewState?.wrongStreak || 0) >= 2), [words]);
   const favoriteWords = useMemo(() => words.filter((w) => w.favorite), [words]);
   const favoriteSenseCount = useMemo(() => words.reduce((sum, w) => sum + w.senses.filter((s) => s.favorite).length, 0), [words]);
@@ -1148,29 +1145,47 @@ const shouldRebuildDeckRef = useRef(true);
     const wasReviewedToday = (w) => (w.reviewState?.lastReviewedAt || 0) >= todayStart;
     const wasWrongToday = (w) => (w.reviewState?.lastWrongAt || 0) >= todayStart;
 
+    const todayStatForDeck = dailyStats[formatDate(now)] || {};
+    const todayNewDone = todayStatForDeck.newReviewed || 0;
+    const todayReviewDone = todayStatForDeck.reviewReviewed || 0;
     const untouchedWords = words.filter(
       (w) =>
         !wasReviewedToday(w) &&
-        w.stats.seen === 0 &&
-        (w.stats.quizCorrect || 0) === 0 &&
-        (w.stats.quizWrong || 0) === 0
+      w.stats.seen === 0 &&
+      (w.stats.quizCorrect || 0) === 0 &&
+      (w.stats.quizWrong || 0) === 0
     );
-
-    const todayTaskNewCount = Math.ceil(
-      (untouchedWords.length || words.length || 0) /
-        Math.max(1, dailyPlan.wordFinishDays || 1)
+    const plannedDailyNewCount = Math.ceil(
+      (words.length || 0) / Math.max(1, dailyPlan.wordFinishDays || 1)
     );
-    const todayTaskReviewCount = Math.max(0, dailyPlan.wordReviewCount || 0);
-
-    const eligibleReviewWords = wrongWordBook.filter((w) => {
+    
+    const todayNewTargetForDeck = Math.min(
+      plannedDailyNewCount,
+      untouchedWords.length + todayNewDone
+    );
+    const todayTaskNewCount = Math.max(
+      0,
+      todayNewTargetForDeck - todayNewDone
+    );
+    const reviewWordsAvailableAtStartOfDay = wrongWordBook.filter((w) => {
       const lastWrongAt = w.reviewState?.lastWrongAt || 0;
       const hasWrongHistory =
-        (w.stats?.unknown || 0) > 0 ||
-        (w.stats?.quizWrong || 0) > 0 ||
-        Boolean(w.reviewState?.pending);
-
-      return hasWrongHistory && lastWrongAt > 0 && lastWrongAt < todayStart && !wasReviewedToday(w) && !wasWrongToday(w);
+      (w.stats?.unknown || 0) > 0 ||
+      (w.stats?.quizWrong || 0) > 0 ||
+      Boolean(w.reviewState?.pending);
+      return hasWrongHistory && lastWrongAt > 0 && lastWrongAt < todayStart;
     });
+    const todayReviewTargetForDeck = Math.min(
+      reviewWordsAvailableAtStartOfDay.length,
+      Math.max(0, dailyPlan.wordReviewCount || 0)
+    );
+    const todayTaskReviewCount = Math.max(
+      0,
+      todayReviewTargetForDeck - todayReviewDone
+    );
+    const eligibleReviewWords = reviewWordsAvailableAtStartOfDay.filter(
+      (w) => !wasReviewedToday(w) && !wasWrongToday(w)
+    );
 
     const randomizedWrongWords = seededShuffleArray(
       eligibleReviewWords,
@@ -1240,7 +1255,15 @@ const shouldRebuildDeckRef = useRef(true);
       if (priorityDelta) return priorityDelta;
       return (b.reviewState?.lastWrongAt || 0) - (a.reviewState?.lastWrongAt || 0);
     });
-  }, [words, wrongWordBook, stubbornWordBook, mode, flashcardFilter, search, dailyPlan.wordFinishDays, dailyPlan.wordReviewCount, shuffleSeed, orderMode]);
+  }, [
+    filteredWordMembershipSignature,
+    orderMode,
+    shuffleSeed,
+    mode,
+    flashcardFilter,
+    search,
+    storageReady,
+  ]);
 
   const filteredPairs = useMemo(() => {
     let base = sixChoicePairs;
@@ -1986,17 +2009,25 @@ function recordFlashcardResult(
   const dueCount = words.filter((w) => (w.srs?.due || 0) <= Date.now()).length;
   const newWordCount = words.filter((w) => w.stats.seen === 0 && (w.stats.quizCorrect || 0) === 0 && (w.stats.quizWrong || 0) === 0).length;
   const pairNewCount = sixChoicePairs.filter((pair) => (pair.stats?.seen || 0) === 0).length;
-  const dailyWordNewTarget = Math.ceil((newWordCount || words.length || 0) / Math.max(1, dailyPlan.wordFinishDays || 1));
-  const dailyPairNewTarget = Math.ceil((pairNewCount || sixChoicePairs.length || 0) / Math.max(1, dailyPlan.pairFinishDays || 1));
-  const todayKey = formatDate(Date.now());
-  const todayStat = dailyStats[todayKey] || {};
-  const todayNewWordStudyCount = todayStat.newReviewed || 0;
+  const dailyWordNewTarget = Math.ceil(
+    (words.length || 0) / Math.max(1, dailyPlan.wordFinishDays || 1)
+  );
+  const dailyPairNewTarget = Math.ceil(
+    (sixChoicePairs.length || 0) / Math.max(1, dailyPlan.pairFinishDays || 1)
+  );
+
+const todayKey = formatDate(Date.now());
+const todayStat = dailyStats[todayKey] || {};
+const todayNewWordStudyCount = todayStat.newReviewed || 0;
   const todayReviewWordStudyCount = todayStat.reviewReviewed || 0;
   const todayWordStudyCount = todayStat.reviewed || 0;
   const todayPairPracticeCount = (todayStat.bbPairCorrect || 0) + (todayStat.bbPairWrong || 0);
   const todayQuizCount = (todayStat.quizCorrect || 0) + (todayStat.quizWrong || 0);
   const todayQuizAccuracy = todayQuizCount ? Math.round(((todayStat.quizCorrect || 0) / todayQuizCount) * 100) : null;
-  const todayNewWordTarget = dailyWordNewTarget;
+  const todayNewWordTarget = Math.min(
+    dailyWordNewTarget,
+    newWordCount + todayNewWordStudyCount
+  );
   const todayReviewWordTarget = todayReviewTargetActual;
   const todayWordTarget = todayNewWordTarget + todayReviewWordTarget;
   const todayPairTarget = dailyPairNewTarget + dailyPlan.pairReviewCount;

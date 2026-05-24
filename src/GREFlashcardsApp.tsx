@@ -3,11 +3,13 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import * as XLSX from "xlsx";
 import {
+  ArrowRight,
   BookOpen,
   Brain,
   CheckCircle2,
   Download,
   Eye,
+  Flame,
   Heart,
   HeartHandshake,
   PencilLine,
@@ -842,6 +844,7 @@ export default function GREFlashcardsApp() {
   const [flashcardCompleteMessage, setFlashcardCompleteMessage] = useState("");
   const [flipped, setFlipped] = useState(false);
   const [mode, setMode] = useState("all");
+  const [activeSection, setActiveSection] = useState("home");
   const [studyView, setStudyView] = useState("flashcards");
   const [flashcardMode, setFlashcardMode] = useState("recognition");
   const [importWordMode, setImportWordMode] = useState("append");
@@ -891,6 +894,7 @@ export default function GREFlashcardsApp() {
 
 const restoredFlashcardStateRef = useRef(null);
 const shouldRebuildDeckRef = useRef(true);
+const sectionEntrySourceRef = useRef("initial_load");
 
   useEffect(() => {
     trackPageView("home");
@@ -915,6 +919,42 @@ const shouldRebuildDeckRef = useRef(true);
       pool_size: quizMode === "bb_pairs" ? filteredPairs.length : filteredWords.length,
     });
   }, [studyView, quizMode]);
+
+  useEffect(() => {
+    track("section_view", {
+      section: activeSection,
+      source: sectionEntrySourceRef.current,
+      study_view: studyView,
+      quiz_mode: activeSection === "pairs" ? "bb_pairs" : studyView === "quiz" ? quizMode : "",
+      flashcard_filter: activeSection === "flashcards" ? flashcardFilter : "",
+      flashcard_mode: activeSection === "flashcards" ? flashcardMode : "",
+      pair_review_mode: activeSection === "pairs" ? pairReviewMode : "",
+    });
+  }, [activeSection]);
+
+  useEffect(() => {
+    if (activeSection !== "records") return;
+    track("records_tab_view", {
+      module: "wrong_book",
+      tab: reviewSummaryTab,
+    });
+  }, [activeSection, reviewSummaryTab]);
+
+  useEffect(() => {
+    if (activeSection !== "records") return;
+    track("records_tab_view", {
+      module: "study_log",
+      tab: studyLogTab,
+    });
+  }, [activeSection, studyLogTab]);
+
+  useEffect(() => {
+    if (activeSection !== "records") return;
+    track("records_tab_view", {
+      module: "favorites",
+      tab: favoriteSummaryTab,
+    });
+  }, [activeSection, favoriteSummaryTab]);
 
   useEffect(() => {
   let cancelled = false;
@@ -2073,6 +2113,66 @@ function nextQuizQuestion() {
   setQuizChecked(false);
 }
 
+function openFlashcardsSection(filter = "task", nextFlashcardMode = flashcardMode, nextMode = "all", source = "unknown") {
+  track("section_nav_click", {
+    target_section: "flashcards",
+    source,
+    filter,
+    flashcard_mode: nextFlashcardMode,
+    mode: nextMode,
+  });
+  if (source.startsWith("home_")) {
+    track("home_cta_click", {
+      cta: source.replace("home_", ""),
+      target_section: "flashcards",
+      filter,
+      flashcard_mode: nextFlashcardMode,
+    });
+  }
+  sectionEntrySourceRef.current = source;
+  setActiveSection("flashcards");
+  setStudyView("flashcards");
+  openFlashcardDeck(nextMode, { filter, flashcardMode: nextFlashcardMode });
+}
+
+function openPairsSection(nextReviewMode = pairReviewMode, source = "unknown") {
+  track("section_nav_click", {
+    target_section: "pairs",
+    source,
+    pair_review_mode: nextReviewMode,
+  });
+  if (source.startsWith("home_")) {
+    track("home_cta_click", {
+      cta: source.replace("home_", ""),
+      target_section: "pairs",
+      pair_review_mode: nextReviewMode,
+    });
+  }
+  sectionEntrySourceRef.current = source;
+  setActiveSection("pairs");
+  setStudyView("quiz");
+  setQuizMode("bb_pairs");
+  setPairReviewMode(nextReviewMode);
+}
+
+function openRecordsSection(source = "unknown") {
+  track("section_nav_click", {
+    target_section: "records",
+    source,
+  });
+  sectionEntrySourceRef.current = source;
+  setActiveSection("records");
+}
+
+function openHomeSection(source = "unknown") {
+  track("section_nav_click", {
+    target_section: "home",
+    source,
+  });
+  sectionEntrySourceRef.current = source;
+  setActiveSection("home");
+}
+
   async function handleImport(event) {
     const files = Array.from(event.target.files || []);
     if (!files.length) return;
@@ -2288,9 +2388,48 @@ function nextQuizQuestion() {
   const reviewWordPlanMeta = getPlanStatusMeta(reviewWordPlanStatus);
   const pairPlanMeta = getPlanStatusMeta(pairPlanStatus);
   const quizPlanMeta = getPlanStatusMeta(quizPlanStatus);
+  const studyStreak = useMemo(() => {
+    let streak = 0;
+    const cursor = new Date();
+    cursor.setHours(0, 0, 0, 0);
+
+    while (true) {
+      const key = formatDate(cursor.getTime());
+      const stat = dailyStats[key];
+      const hasActivity = !!stat && (
+        (stat.reviewed || 0) +
+        (stat.quizCorrect || 0) +
+        (stat.quizWrong || 0) +
+        (stat.bbPairCorrect || 0) +
+        (stat.bbPairWrong || 0)
+      ) > 0;
+
+      if (!hasActivity) break;
+      streak += 1;
+      cursor.setDate(cursor.getDate() - 1);
+    }
+
+    return streak;
+  }, [dailyStats]);
+  const homePrimaryLabel = todayWordRemaining > 0
+    ? "先刷今天的单词任务"
+    : todayPairRemaining > 0
+      ? "切到六选二热热身"
+      : todayQuizAccuracy === null || todayQuizAccuracy < dailyPlan.quizTarget
+        ? "做一轮练习找状态"
+        : "按你的节奏继续学";
+  const homePrimaryHint = todayWordRemaining > 0
+    ? `今天还差 ${todayWordRemaining} 个单词学习量，从这里开始最省心。`
+    : todayPairRemaining > 0
+      ? `六选二今天还差 ${todayPairRemaining} 对，正好拿来进入学习状态。`
+      : "今天该推进的内容差不多都推完了，挑一块继续巩固就行。";
+  const isHomeSection = activeSection === "home";
+  const isFlashcardsSection = activeSection === "flashcards";
+  const isPairsSection = activeSection === "pairs";
+  const isRecordsSection = activeSection === "records";
   
   return (
-    <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+    <div className="app-shell min-h-screen p-4 md:p-8">
       <div className="mx-auto max-w-7xl space-y-6">
         {storageMessage ? (
           <Card className="rounded-2xl border-amber-300 bg-amber-50 shadow-sm">
@@ -2298,31 +2437,107 @@ function nextQuizQuestion() {
           </Card>
         ) : null}
 
-
-        <div className="grid gap-4 md:grid-cols-5">
-          <Card className="rounded-2xl shadow-sm"><CardContent className="p-5"><div className="text-sm text-slate-500">Total Words</div><div className="mt-2 text-3xl font-semibold">{words.length}</div></CardContent></Card>
-          <Card className="rounded-2xl shadow-sm"><CardContent className="p-5"><div className="text-sm text-slate-500">Due Today</div><div className="mt-2 text-3xl font-semibold">{dueCount}</div></CardContent></Card>
-          <Card className="rounded-2xl shadow-sm"><CardContent className="p-5"><div className="text-sm text-slate-500">Wrong-Words</div><div className="mt-2 text-3xl font-semibold">{wrongCount}</div></CardContent></Card>
-          <Card className="rounded-2xl shadow-sm"><CardContent className="p-5"><div className="text-sm text-slate-500">Favorites</div><div className="mt-2 text-3xl font-semibold">{favoriteWords.length + favoriteSenseCount}</div></CardContent></Card>
-          <Card className="rounded-2xl shadow-sm"><CardContent className="p-5"><div className="text-sm text-slate-500">BB Pairs</div><div className="mt-2 text-3xl font-semibold">{sixChoicePairs.length}</div></CardContent></Card>
+        <div className="flex flex-wrap items-center gap-2 rounded-[28px] border border-white/70 bg-white/80 p-2 shadow-[0_20px_50px_-40px_rgba(15,23,42,0.35)] backdrop-blur">
+          <Button variant={isHomeSection ? "default" : "ghost"} className={`rounded-2xl px-4 ${isHomeSection ? "bg-cyan-700 hover:bg-cyan-800" : ""}`} onClick={() => openHomeSection("top_nav")}>首页</Button>
+          <Button variant={isFlashcardsSection ? "default" : "ghost"} className={`rounded-2xl px-4 ${isFlashcardsSection ? "bg-cyan-700 hover:bg-cyan-800" : ""}`} onClick={() => openFlashcardsSection("task", flashcardMode, "all", "top_nav")}>闪卡</Button>
+          <Button variant={isPairsSection ? "default" : "ghost"} className={`rounded-2xl px-4 ${isPairsSection ? "bg-cyan-700 hover:bg-cyan-800" : ""}`} onClick={() => openPairsSection(pairReviewMode, "top_nav")}>六选二</Button>
+          <Button variant={isRecordsSection ? "default" : "ghost"} className={`rounded-2xl px-4 ${isRecordsSection ? "bg-cyan-700 hover:bg-cyan-800" : ""}`} onClick={() => openRecordsSection("top_nav")}>记录</Button>
         </div>
 
-        <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
-          <Card className="order-2 rounded-2xl shadow-sm lg:order-1">
+        <section className={isHomeSection ? "space-y-6" : isRecordsSection ? "space-y-6" : "grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)]"}>
+          {isHomeSection ? <Card className="overflow-hidden rounded-[32px] border-0 bg-gradient-to-br from-sky-950 via-cyan-900 to-indigo-950 text-white shadow-[0_30px_80px_-45px_rgba(15,23,42,0.85)]">
+            <CardContent className="p-6 md:p-8">
+              <div className="grid gap-6 lg:grid-cols-[minmax(0,1.05fr)_280px]">
+                <div className="space-y-6">
+                  <div className="space-y-3">
+                    <Badge className="w-fit rounded-full border border-white/15 bg-white/10 px-3 py-1 text-white">GREFlashcards</Badge>
+                    <h1 className="max-w-3xl text-3xl font-semibold tracking-tight text-white md:text-5xl">
+                      马上开始学习吧！
+                    </h1>
+                  </div>
+
+                  <div className="rounded-[28px] border border-white/12 bg-white/10 p-5 backdrop-blur">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div>
+                        <div className="text-xs font-medium uppercase tracking-[0.24em] text-sky-100/75">今天先学什么</div>
+                        <div className="mt-2 text-2xl font-semibold md:text-3xl">{homePrimaryLabel}</div>
+                        <p className="mt-2 max-w-xl text-sm leading-7 text-sky-100/80">{homePrimaryHint}</p>
+                      </div>
+                      <Badge className={`rounded-full border-0 px-3 py-1 ${overallPlanMeta.badgeClass}`}>{overallPlanMeta.label}</Badge>
+                    </div>
+
+                    <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                      <Button
+                        className="h-auto rounded-[24px] bg-amber-300 px-5 py-4 text-left text-slate-950 hover:bg-amber-200"
+                        onClick={() => openFlashcardsSection("task", flashcardMode, "all", "home_task")}
+                      >
+                        <div className="flex w-full items-center justify-between gap-3">
+                          <div>
+                            <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-700">今日任务</div>
+                            <div className="mt-1 text-base font-semibold">开始刷单词</div>
+                          </div>
+                          <ArrowRight className="h-4 w-4" />
+                        </div>
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="h-auto rounded-[24px] border-white/20 bg-white/8 px-5 py-4 text-left text-white hover:bg-white/14"
+                        onClick={() => openFlashcardsSection("review", "recognition", "all", "home_review")}
+                      >
+                        <div>
+                          <div className="text-xs font-medium uppercase tracking-[0.18em] text-sky-100/70">今天复习</div>
+                          <div className="mt-1 text-base font-semibold">回顾该复习的词</div>
+                        </div>
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="h-auto rounded-[24px] border-white/20 bg-white/8 px-5 py-4 text-left text-white hover:bg-white/14 sm:col-span-2 xl:col-span-1"
+                        onClick={() => openPairsSection("mix", "home_pairs")}
+                      >
+                        <div>
+                          <div className="text-xs font-medium uppercase tracking-[0.18em] text-sky-100/70">六选二</div>
+                          <div className="mt-1 text-base font-semibold">做一组配对练习</div>
+                        </div>
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid gap-3">
+                  <div className="rounded-[24px] border border-white/12 bg-white/10 p-5 backdrop-blur">
+                    <div className="text-sm text-sky-100/75">今日进度</div>
+                    <div className="mt-2 text-3xl font-semibold">{todayWordStudyCount} / {todayWordTarget || 0}</div>
+                    <div className="mt-2 text-sm text-sky-100/80">
+                      {todayWordRemaining > 0 ? `还差 ${todayWordRemaining} 个单词学习量` : "今天的单词目标已达标"}
+                    </div>
+                    <Progress value={todayWordProgressPct} className="mt-4 h-2 bg-white/15" />
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+                    <div className="rounded-[24px] border border-white/12 bg-white/10 p-5 backdrop-blur">
+                      <div className="flex items-center gap-2 text-sm text-sky-100/75"><Flame className="h-4 w-4" /> 连续学习</div>
+                      <div className="mt-2 text-2xl font-semibold">{studyStreak} 天</div>
+                      <div className="mt-2 text-sm text-sky-100/80">保持一点连续性，比一次学很久更重要。</div>
+                    </div>
+                    <div className="rounded-[24px] border border-white/12 bg-white/10 p-5 backdrop-blur">
+                      <div className="text-sm text-sky-100/75">六选二进度</div>
+                      <div className="mt-2 text-2xl font-semibold">{todayPairPracticeCount} / {todayPairTarget}</div>
+                      <div className="mt-2 text-sm text-sky-100/80">{todayPairRemaining > 0 ? `还差 ${todayPairRemaining} 对` : "今天的六选二练习已达标"}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card> : null}
+
+          {!isHomeSection && !isRecordsSection ? <Card className="rounded-[28px] border border-slate-200/70 bg-white/90 shadow-[0_24px_60px_-42px_rgba(15,23,42,0.28)]">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-lg"><BookOpen className="h-5 w-5" /> GRE Trainer</CardTitle>
+              <CardTitle className="flex items-center gap-2 text-lg"><BookOpen className="h-5 w-5" /> {isFlashcardsSection ? "闪卡面板" : "六选二面板"}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <input ref={fileRef} type="file" accept=".json,.csv,.xlsx,.xls,.pdf" multiple className="hidden" onChange={handleImport} />
 
-              <div className="space-y-2">
-                <div className="text-sm font-medium">Training View</div>
-                <Tabs value={studyView} onValueChange={setStudyView} className="w-full">
-                  <TabsList className="grid w-full grid-cols-2 gap-2 h-auto bg-transparent p-0">
-                    <TabsTrigger value="flashcards" className="rounded-xl border px-3 py-2">Flashcards</TabsTrigger>
-                    <TabsTrigger value="quiz" className="rounded-xl border px-3 py-2">GRE Quiz</TabsTrigger>
-                  </TabsList>
-                </Tabs>
+              <div className="rounded-[20px] bg-slate-50/80 p-4 text-sm text-slate-600">
+                {isFlashcardsSection ? "这里是单词学习区，设置好模式和范围就可以直接开始。" : "这里是六选二区，只保留配对练习相关设置。"}
               </div>
 
               {studyView === "flashcards" ? (
@@ -2427,8 +2642,8 @@ function nextQuizQuestion() {
                 </div>
               ) : null}
 
-              <Button className="w-full rounded-2xl" onClick={() => fileRef.current?.click()}><Upload className="mr-2 h-4 w-4" /> Import Word List / PDF</Button>
-              <Button variant="outline" className="w-full rounded-2xl" onClick={exportData}><Download className="mr-2 h-4 w-4" /> Export Progress</Button>
+              <Button className="h-11 w-full rounded-2xl bg-cyan-700 hover:bg-cyan-800" onClick={() => fileRef.current?.click()}><Upload className="mr-2 h-4 w-4" /> Import Word List / PDF</Button>
+              <Button variant="outline" className="h-11 w-full rounded-2xl border-slate-200 bg-white" onClick={exportData}><Download className="mr-2 h-4 w-4" /> Export Progress</Button>
 
               <div className="space-y-2 pt-2 border-t">
                 <div className="text-sm font-medium">Word Import Mode</div>
@@ -2449,55 +2664,59 @@ function nextQuizQuestion() {
                 <Button variant="outline" size="sm" className="rounded-2xl w-full" onClick={resetBbPairLibrary}>清空当前 BB 题库到默认样例</Button>
               </div>
             </CardContent>
-          </Card>
+          </Card> : null}
 
-          <div className="order-1 space-y-6 lg:order-2">
-            {studyView === "flashcards" ? (
+          {!isHomeSection ? <div className="space-y-6">
+            {!isRecordsSection ? (studyView === "flashcards" ? (
               <>
-                <Card className="rounded-2xl shadow-sm">
+                <Card className="rounded-[28px] border border-slate-200/70 bg-white/90 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.28)]">
                   <CardContent className="p-5">
-                    <div className="mb-3 flex items-center justify-between gap-3 text-sm text-slate-600">
-                      <span>{sessionOrder.length ? `Card ${Math.min(currentIndex + 1, sessionOrder.length)} / ${sessionOrder.length}` : "No cards found"}</span>
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600">
+                      <div className="flex items-center gap-2">
+                        <Badge className="rounded-full bg-cyan-100 text-cyan-900">Flashcards</Badge>
+                        <span>{sessionOrder.length ? `第 ${Math.min(currentIndex + 1, sessionOrder.length)} 张 / 共 ${sessionOrder.length} 张` : "No cards found"}</span>
+                      </div>
                       <div className="flex items-center gap-2">
                         {(mode !== "all" || flashcardFilter !== "all") ? (
                           <Button variant="outline" size="sm" className="rounded-full" onClick={() => openFlashcardDeck("all", { filter: "all" })}>返回全部闪卡</Button>
                         ) : null}
-                        <span>{progressLabel}</span>
+                        <span className="font-medium text-slate-700">{progressLabel}</span>
                       </div>
                     </div>
-                    <Progress value={progress} className="h-2" />
+                    <Progress value={progress} className="h-2 bg-slate-100" />
                   </CardContent>
                 </Card>
 
                 {flashcardCompleteMessage ? (
-                  <Card className="rounded-[28px] border-violet-100 bg-white/90 shadow-sm">
+                  <Card className="rounded-[32px] border border-emerald-100 bg-white/92 shadow-[0_32px_70px_-48px_rgba(15,23,42,0.5)]">
                     <CardContent className="flex min-h-[560px] flex-col items-center justify-center gap-5 p-8 text-center">
-                      <div className="rounded-full bg-violet-50 px-5 py-2 text-sm font-medium text-violet-700">Completed</div>
+                      <div className="rounded-full bg-emerald-50 px-5 py-2 text-sm font-medium text-emerald-700">Completed</div>
                       <h2 className="text-3xl font-semibold tracking-tight text-slate-900 md:text-4xl">{flashcardCompleteMessage}</h2>
                       <p className="max-w-md text-sm leading-7 text-slate-500">可以休息一下，或者回到今日计划继续其他任务。</p>
                       <div className="mt-2 flex flex-wrap justify-center gap-3">
-                        <Button className="rounded-2xl" onClick={() => openFlashcardDeck("all", { filter: "task", flashcardMode })}>查看今日总任务</Button>
-                        <Button variant="outline" className="rounded-2xl" onClick={() => openFlashcardDeck("all", { filter: "today_new", flashcardMode })}>继续今日新词</Button>
-                        <Button variant="outline" className="rounded-2xl" onClick={() => openFlashcardDeck("all", { filter: "review", flashcardMode: "recognition" })}>查看今日复习</Button>
+                        <Button className="rounded-2xl bg-cyan-700 hover:bg-cyan-800" onClick={() => openFlashcardDeck("all", { filter: "task", flashcardMode })}>查看今日总任务</Button>
+                        <Button variant="outline" className="rounded-2xl border-slate-200 bg-white" onClick={() => openFlashcardDeck("all", { filter: "today_new", flashcardMode })}>继续今日新词</Button>
+                        <Button variant="outline" className="rounded-2xl border-slate-200 bg-white" onClick={() => openFlashcardDeck("all", { filter: "review", flashcardMode: "recognition" })}>查看今日复习</Button>
                       </div>
                     </CardContent>
                   </Card>
                 ) : currentWord ? (
                   <AnimatePresence mode="wait">
                     <motion.div key={`${currentWord.id}-${flipped}-${revealLevel}-${currentIndex}`} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.2 }}>
-                      <Card className="min-h-[560px] cursor-pointer rounded-[28px] shadow-sm" onClick={() => { if (!flipped) setFlipped(true); else setRevealLevel((v) => Math.min(v + 1, 3)); }}>
+                      <Card className="min-h-[620px] cursor-pointer overflow-hidden rounded-[34px] border border-slate-200/80 bg-white/94 shadow-[0_36px_80px_-54px_rgba(15,23,42,0.55)]" onClick={() => { if (!flipped) setFlipped(true); else setRevealLevel((v) => Math.min(v + 1, 3)); }}>
                         <CardContent className="flex min-h-[560px] flex-col justify-between p-6 md:p-8">
                           {!flipped ? (
-                            <div className="flex h-full min-h-[420px] flex-col items-center justify-center text-center">
+                            <div className="flex h-full min-h-[460px] flex-col items-center justify-center text-center">
                               {flashcardMode === "recognition" ? (
                                 <>
-                                  <div className="text-sm uppercase tracking-[0.2em] text-slate-400">Flashcard</div>
-                                  <h1 className="mt-6 text-5xl font-semibold tracking-tight md:text-7xl">{currentWord.word}</h1>
+                                  <div className="rounded-full bg-amber-100 px-4 py-1 text-xs font-medium uppercase tracking-[0.24em] text-amber-900">Tap To Reveal</div>
+                                  <h1 className="mt-8 text-5xl font-semibold tracking-tight text-slate-950 md:text-7xl">{currentWord.word}</h1>
+                                  <p className="mt-5 max-w-md text-sm leading-7 text-slate-500">先自己想一秒，再点开释义，记忆会更牢一点。</p>
                                 </>
                               ) : (
                                 <>
-                                  <div className="text-sm uppercase tracking-[0.2em] text-slate-400">Retrieval</div>
-                                  <div className="mt-6 w-full max-w-2xl rounded-[28px] border bg-white p-6 text-left shadow-sm">
+                                  <div className="rounded-full bg-sky-100 px-4 py-1 text-xs font-medium uppercase tracking-[0.24em] text-sky-900">Retrieval Mode</div>
+                                  <div className="mt-6 w-full max-w-2xl rounded-[28px] border border-slate-200 bg-slate-50/70 p-6 text-left shadow-sm">
                                     <div className="text-xs font-medium text-slate-400">根据词义回忆单词</div>
                                     <div className="mt-3 text-sm font-medium text-slate-500">中文词义</div>
                                     <div className="mt-1 text-2xl font-semibold leading-9 text-slate-900">{promptSense?.zh || currentWord.shortMeaning || "—"}</div>
@@ -2515,7 +2734,7 @@ function nextQuizQuestion() {
                             <div className="space-y-6">
                               <div className="flex flex-wrap items-center gap-3">
                                 <h2 className="text-3xl font-semibold">{currentWord.word}</h2>
-                                <Button variant="outline" size="sm" className="rounded-full" onClick={(e) => { e.stopPropagation(); toggleFavoriteWord(currentWord.id); }}>
+                                <Button variant="outline" size="sm" className="rounded-full border-slate-200 bg-white" onClick={(e) => { e.stopPropagation(); toggleFavoriteWord(currentWord.id); }}>
                                   <Heart className={`mr-2 h-4 w-4 ${currentWord.favorite ? "fill-current text-rose-500" : "text-slate-500"}`} />
                                   {currentWord.favorite ? "已收藏单词" : "收藏单词"}
                                 </Button>
@@ -2525,17 +2744,17 @@ function nextQuizQuestion() {
                               </div>
 
                               {currentWord.memoryTip ? (
-                                <div className="rounded-2xl bg-slate-100 p-4">
+                                <div className="rounded-[24px] bg-amber-50 p-4">
                                   <div className="mb-1 flex items-center gap-2 text-sm font-medium text-slate-500"><HeartHandshake className="h-4 w-4" /> 辅助记忆</div>
                                   <div className="text-base leading-7 text-slate-700">{currentWord.memoryTip}</div>
                                 </div>
                               ) : null}
 
                               {displayedSenses.map((sense, idx) => (
-                                <div key={`${currentWord.id}-${idx}`} className="rounded-2xl border p-4 space-y-4">
+                                <div key={`${currentWord.id}-${idx}`} className="rounded-[24px] border border-slate-200 bg-slate-50/60 p-4 space-y-4">
                                   <div className="flex flex-wrap items-center gap-2">
                                     <Badge className="rounded-full">{sense.label || `Sense ${idx + 1}`}</Badge>
-                                    <Button variant="outline" size="sm" className="rounded-full" onClick={(e) => { e.stopPropagation(); toggleFavoriteSense(currentWord.id, sense.id); }}>
+                                    <Button variant="outline" size="sm" className="rounded-full border-slate-200 bg-white" onClick={(e) => { e.stopPropagation(); toggleFavoriteSense(currentWord.id, sense.id); }}>
                                       <Heart className={`mr-2 h-4 w-4 ${sense.favorite ? "fill-current text-rose-500" : "text-slate-500"}`} />
                                       {sense.favorite ? "已收藏词义" : "收藏词义"}
                                     </Button>
@@ -2552,15 +2771,16 @@ function nextQuizQuestion() {
                             </div>
                           )}
 
-                          <div className="mt-8 flex flex-wrap items-center justify-between gap-3">
-                            <div className="flex gap-2">
-                              <Button variant="outline" className="rounded-2xl" onClick={(e) => { e.stopPropagation(); goPrev(); }}>Previous</Button>
-                              <Button variant="outline" className="rounded-2xl" onClick={(e) => { e.stopPropagation(); if (!flipped) setFlipped(true); else setRevealLevel((v) => Math.min(v + 1, 3)); }}><Eye className="mr-2 h-4 w-4" /> {nextRevealLabel}</Button>
-                              <Button variant="outline" className="rounded-2xl" onClick={(e) => { e.stopPropagation(); goNext(); }}>Next</Button>
+                          <div className="mt-8 grid gap-4 rounded-[28px] border border-slate-200 bg-white/80 p-4 md:grid-cols-[1fr_auto]">
+                            <div className="flex flex-wrap gap-2">
+                              <Button variant="outline" className="rounded-2xl border-slate-200 bg-white" onClick={(e) => { e.stopPropagation(); goPrev(); }}>Previous</Button>
+                              <Button variant="outline" className="rounded-2xl border-slate-200 bg-white px-5" onClick={(e) => { e.stopPropagation(); if (!flipped) setFlipped(true); else setRevealLevel((v) => Math.min(v + 1, 3)); }}><Eye className="mr-2 h-4 w-4" /> {!flipped ? "显示释义" : nextRevealLabel}</Button>
+                              <Button variant="outline" className="rounded-2xl border-slate-200 bg-white" onClick={(e) => { e.stopPropagation(); goNext(); }}>Next</Button>
                             </div>
-                            <div className="flex gap-2">
-                              <Button variant="outline" className="rounded-2xl" onClick={(e) => { e.stopPropagation(); updateWordResult("unknown"); }}><XCircle className="mr-2 h-4 w-4" /> Don’t Know</Button>
-                              <Button className="rounded-2xl" onClick={(e) => { e.stopPropagation(); updateWordResult("known"); }}><CheckCircle2 className="mr-2 h-4 w-4" /> Know</Button>
+                            <div className="grid gap-2 sm:grid-cols-3">
+                              <Button variant="outline" className="rounded-2xl border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100" onClick={(e) => { e.stopPropagation(); updateWordResult("known"); }}><CheckCircle2 className="mr-2 h-4 w-4" /> 认识</Button>
+                              <Button variant="outline" className="rounded-2xl border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100" onClick={(e) => { e.stopPropagation(); goNext(); }}>模糊，先跳过</Button>
+                              <Button variant="outline" className="rounded-2xl border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100" onClick={(e) => { e.stopPropagation(); updateWordResult("unknown"); }}><XCircle className="mr-2 h-4 w-4" /> 不认识</Button>
                             </div>
                           </div>
                         </CardContent>
@@ -2573,27 +2793,27 @@ function nextQuizQuestion() {
               </>
             ) : (
               <>
-                <Card className="rounded-2xl shadow-sm">
+                <Card className="rounded-[28px] border border-slate-200/70 bg-white/90 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.28)]">
                   <CardContent className="p-5 flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <div className="text-sm text-slate-500">GRE Quiz Mode</div>
                       <div className="mt-1 text-lg font-semibold">{quizMode === "equivalence" ? "等价词训练" : quizMode === "antonym" ? "反义关系训练" : "BB 六选二训练"}</div>
                     </div>
-                    <Badge variant="outline" className="rounded-full px-3 py-1">{quizMode === "bb_pairs" ? `${filteredPairs.length || sixChoicePairs.length} pairs in pool` : `${filteredWords.length || words.length} words in pool`}</Badge>
+                    <Badge variant="outline" className="rounded-full border-slate-200 bg-white px-3 py-1">{quizMode === "bb_pairs" ? `${filteredPairs.length || sixChoicePairs.length} pairs in pool` : `${filteredWords.length || words.length} words in pool`}</Badge>
                   </CardContent>
                 </Card>
 
                 {quizQuestion ? (
-                  <Card className="min-h-[560px] rounded-[28px] shadow-sm">
+                  <Card className="min-h-[620px] rounded-[34px] border border-slate-200/80 bg-white/94 shadow-[0_36px_80px_-54px_rgba(15,23,42,0.55)]">
                     <CardContent className="p-6 md:p-8 space-y-6">
                       <div className="flex flex-wrap items-center gap-3">
-                        <Badge className="rounded-full"><Target className="mr-2 h-4 w-4" /> {quizMode === "equivalence" ? "Text Completion / Equivalence" : quizMode === "antonym" ? "Opposite Logic" : "BB Six-Choice Pairing"}</Badge>
-                        {quizHintMode === "study" && quizQuestion.frequency ? <Badge variant="outline" className="rounded-full">{quizQuestion.frequency}</Badge> : null}
+                        <Badge className="rounded-full bg-cyan-100 text-cyan-900"><Target className="mr-2 h-4 w-4" /> {quizMode === "equivalence" ? "Text Completion / Equivalence" : quizMode === "antonym" ? "Opposite Logic" : "BB Six-Choice Pairing"}</Badge>
+                        {quizHintMode === "study" && quizQuestion.frequency ? <Badge variant="outline" className="rounded-full border-slate-200 bg-white">{quizQuestion.frequency}</Badge> : null}
                       </div>
-                      <div className="space-y-3">
-                        <div className="text-sm text-slate-500">Prompt word</div>
-                        <div className="text-4xl font-semibold tracking-tight">{quizQuestion.promptWord}</div>
-                        <div className="rounded-2xl bg-slate-100 p-4 text-slate-700 leading-7">
+                      <div className="space-y-4 rounded-[28px] bg-slate-50/80 p-6">
+                        <div className="text-sm font-medium text-slate-500">题目</div>
+                        <div className="text-4xl font-semibold tracking-tight text-slate-950 md:text-5xl">{quizQuestion.promptWord}</div>
+                        <div className="rounded-[24px] bg-white p-4 text-slate-700 leading-7 shadow-sm">
                           {quizHintMode === "study" ? <div><span className="font-medium">中文提示：</span>{quizQuestion.promptZh || "—"}</div> : null}
                           {quizHintMode === "study" && quizMode !== "bb_pairs" ? <div className="mt-2"><span className="font-medium">English hint：</span>{quizQuestion.promptEn || "—"}</div> : null}
                         </div>
@@ -2604,8 +2824,8 @@ function nextQuizQuestion() {
                           const isCorrect = quizChecked && choice === quizQuestion.correctAnswer;
                           const isWrongSelected = quizChecked && isSelected && choice !== quizQuestion.correctAnswer;
                           return (
-                            <button key={choice} type="button" disabled={quizChecked} onClick={() => setSelectedChoice(choice)} className={`rounded-2xl border px-4 py-4 text-left transition ${isCorrect ? "border-emerald-500 bg-emerald-50" : isWrongSelected ? "border-rose-500 bg-rose-50" : isSelected ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white hover:bg-slate-50"}`}>
-                              <div className="flex items-center gap-3"><PencilLine className="h-4 w-4 text-slate-500" /><span className="text-base font-medium">{choice}</span></div>
+                            <button key={choice} type="button" disabled={quizChecked} onClick={() => setSelectedChoice(choice)} className={`min-h-20 rounded-[24px] border px-5 py-4 text-left transition ${isCorrect ? "border-emerald-500 bg-emerald-50 shadow-[0_16px_40px_-24px_rgba(16,185,129,0.6)]" : isWrongSelected ? "border-rose-500 bg-rose-50 shadow-[0_16px_40px_-24px_rgba(244,63,94,0.55)]" : isSelected ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white hover:-translate-y-0.5 hover:bg-slate-50"}`}>
+                              <div className="flex items-center gap-3"><PencilLine className="h-4 w-4 text-slate-500" /><span className="text-base font-medium leading-7">{choice}</span></div>
                             </button>
                           );
                         })}
@@ -2656,23 +2876,23 @@ function nextQuizQuestion() {
                           </div>
                         </div>
                       ) : quizChecked ? (
-                        <div className={`rounded-2xl p-4 ${
+                        <div className={`rounded-[24px] border p-5 ${
                           selectedChoice === quizQuestion.correctAnswer
-                            ? "bg-emerald-50 text-emerald-800"
-                            : "bg-rose-50 text-rose-800"
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                            : "border-rose-200 bg-rose-50 text-rose-800"
                         }`}>
-                          <div className="font-medium">
+                          <div className="text-base font-semibold">
                             {selectedChoice === quizQuestion.correctAnswer ? "答对了" : "答错了"}
                           </div>
-                          <div className="mt-1">正确答案：{quizQuestion.correctAnswer}</div>
-                          <div className="mt-1">{quizQuestion.explanation}</div>
+                          <div className="mt-2 text-sm">正确答案：<span className="font-semibold">{quizQuestion.correctAnswer}</span></div>
+                          <div className="mt-2 text-sm leading-7">{quizQuestion.explanation}</div>
                         </div>
                       ) : null}
                                             <div className="flex flex-wrap items-center justify-between gap-3 pt-4">
-                        <Button variant="outline" className="rounded-2xl" onClick={nextQuizQuestion}>Skip</Button>
+                        <Button variant="outline" className="rounded-2xl border-slate-200 bg-white" onClick={nextQuizQuestion}>Skip</Button>
                         <div className="flex gap-2">
-                          <Button variant="outline" className="rounded-2xl" disabled={!selectedChoice || quizChecked} onClick={() => checkQuizAnswer()}>Check</Button>
-                          <Button className="rounded-2xl" onClick={nextQuizQuestion}>Next Question</Button>
+                          <Button variant="outline" className="rounded-2xl border-slate-200 bg-white" disabled={!selectedChoice || quizChecked} onClick={() => checkQuizAnswer()}>Check</Button>
+                          <Button className="rounded-2xl bg-cyan-700 hover:bg-cyan-800" onClick={nextQuizQuestion}>Next Question</Button>
                         </div>
                       </div>
                     </CardContent>
@@ -2681,9 +2901,10 @@ function nextQuizQuestion() {
                   <Card className="rounded-[28px] shadow-sm"><CardContent className="flex min-h-[460px] flex-col items-center justify-center p-8 text-center"><div className="rounded-full bg-slate-100 p-4"><Trash2 className="h-8 w-8 text-slate-500" /></div><h3 className="mt-4 text-2xl font-semibold">Quiz pool is too small</h3></CardContent></Card>
                 )}
               </>
-            )}
+            )) : null}
 
-            <Card className="rounded-2xl shadow-sm">
+            {isRecordsSection ? <>
+            {false ? <Card className="rounded-2xl shadow-sm">
               <CardHeader>
                 <CardTitle className="text-lg">今日计划模块</CardTitle>
               </CardHeader>
@@ -2751,7 +2972,7 @@ function nextQuizQuestion() {
                   </div>
                 </div>
               </CardContent>
-            </Card>
+            </Card> : null}
 
             <Card className="rounded-2xl shadow-sm">
               <CardHeader className="space-y-4">
@@ -2762,10 +2983,10 @@ function nextQuizQuestion() {
                   </CardTitle>
 
                   <div className="flex flex-wrap gap-2">
-                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => { track("open_wrong_book_words", { wrong_count: wrongWordSummary.length }); openFlashcardDeck("wrong", { filter: "all", flashcardMode: "recognition" }); }}>
+                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => { track("open_wrong_book_words", { wrong_count: wrongWordSummary.length }); track("records_entry_click", { entry: "wrong_words", target_section: "flashcards" }); sectionEntrySourceRef.current = "records_wrong_words"; setActiveSection("flashcards"); openFlashcardDeck("wrong", { filter: "all", flashcardMode: "recognition" }); }}>
                       去刷单词错题
                     </Button>
-                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => { setStudyView("quiz"); setQuizMode("bb_pairs"); setPairReviewMode("wrong"); }}>
+                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => { track("records_entry_click", { entry: "wrong_pairs", target_section: "pairs" }); sectionEntrySourceRef.current = "records_wrong_pairs"; setActiveSection("pairs"); setStudyView("quiz"); setQuizMode("bb_pairs"); setPairReviewMode("wrong"); }}>
                       去刷六选二错题
                     </Button>
                     <Button variant="outline" size="sm" className="rounded-full" onClick={() => { if (reviewSummaryTab === "words") clearAllWrongWords(); else clearAllWrongPairs(); }} disabled={reviewSummaryTab === "words" ? !wrongWordSummary.length : !wrongPairSummary.length}>
@@ -2943,8 +3164,8 @@ function nextQuizQuestion() {
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <CardTitle className="flex items-center gap-2 text-lg"><Heart className="h-5 w-5" />收藏汇总</CardTitle>
                   <div className="flex flex-wrap gap-2">
-                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => openFlashcardDeck("favorite_words", { filter: "all", flashcardMode })}>去刷收藏单词</Button>
-                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => openFlashcardDeck("favorite_senses", { filter: "all", flashcardMode })}>去刷收藏词义</Button>
+                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => { track("records_entry_click", { entry: "favorite_words", target_section: "flashcards" }); sectionEntrySourceRef.current = "records_favorite_words"; setActiveSection("flashcards"); openFlashcardDeck("favorite_words", { filter: "all", flashcardMode }); }}>去刷收藏单词</Button>
+                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => { track("records_entry_click", { entry: "favorite_senses", target_section: "flashcards" }); sectionEntrySourceRef.current = "records_favorite_senses"; setActiveSection("flashcards"); openFlashcardDeck("favorite_senses", { filter: "all", flashcardMode }); }}>去刷收藏词义</Button>
                   </div>
                 </div>
 
@@ -3007,8 +3228,9 @@ function nextQuizQuestion() {
                 </div>
               </CardContent>
             </Card>
-          </div>
-        </div>
+            </> : null}
+          </div> : null}
+        </section>
       </div>
     </div>
   );

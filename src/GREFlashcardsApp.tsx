@@ -2904,9 +2904,9 @@ function openHomeSection(source = "unknown") {
             )) : null}
 
             {isRecordsSection ? <>
-            {false ? <Card className="rounded-2xl shadow-sm">
+            <Card className="rounded-2xl shadow-sm">
               <CardHeader>
-                <CardTitle className="text-lg">今日计划模块</CardTitle>
+                <CardTitle className="text-lg">学习目标</CardTitle>
               </CardHeader>
               <CardContent className="space-y-5">
                 <div className="rounded-2xl border p-4 space-y-4">
@@ -2972,7 +2972,7 @@ function openHomeSection(source = "unknown") {
                   </div>
                 </div>
               </CardContent>
-            </Card> : null}
+            </Card>
 
             <Card className="rounded-2xl shadow-sm">
               <CardHeader className="space-y-4">

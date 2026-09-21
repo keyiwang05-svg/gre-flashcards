@@ -3150,8 +3150,8 @@ function openHomeSection(source = "unknown") {
               </>
             ) : (
               <>
-                <Card className="rounded-[28px] border border-slate-200/70 bg-white/90 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.28)]">
-                  <CardContent className="p-5 flex flex-wrap items-center justify-between gap-3">
+                <Card className={`rounded-[28px] border border-slate-200/70 bg-white/90 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.28)] ${immersiveMode && quizMode === "bb_pairs" ? "rounded-2xl" : ""}`}>
+                  <CardContent className={`${immersiveMode && quizMode === "bb_pairs" ? "p-3" : "p-5"} flex flex-wrap items-center justify-between gap-3`}>
                     <div>
                       <div className="text-sm text-slate-500">GRE Quiz Mode</div>
                       <div className="mt-1 text-lg font-semibold">{quizMode === "equivalence" ? "等价词训练" : quizMode === "antonym" ? "反义关系训练" : "BB 六选二训练"}</div>
@@ -3169,8 +3169,8 @@ function openHomeSection(source = "unknown") {
                 </Card>
 
                 {quizQuestion ? (
-                  <Card className="min-h-[620px] rounded-[34px] border border-slate-200/80 bg-white/94 shadow-[0_36px_80px_-54px_rgba(15,23,42,0.55)]">
-                    <CardContent className="p-6 md:p-8 space-y-6">
+                  <Card className={`${immersiveMode && quizMode === "bb_pairs" ? "min-h-0 rounded-2xl" : "min-h-[620px] rounded-[34px]"} border border-slate-200/80 bg-white/94 shadow-[0_36px_80px_-54px_rgba(15,23,42,0.55)]`}>
+                    <CardContent className={`${immersiveMode && quizMode === "bb_pairs" ? "space-y-3 p-4" : "space-y-6 p-6 md:p-8"}`}>
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div className="flex flex-wrap items-center gap-3">
                           <Badge className="rounded-full bg-cyan-100 text-cyan-900"><Target className="mr-2 h-4 w-4" /> {quizMode === "equivalence" ? "Text Completion / Equivalence" : quizMode === "antonym" ? "Opposite Logic" : "BB Six-Choice Pairing"}</Badge>
@@ -3182,10 +3182,10 @@ function openHomeSection(source = "unknown") {
                           </div>
                         ) : null}
                       </div>
-                      <div className="space-y-4 rounded-[28px] bg-slate-50/80 p-6">
+                      <div className={`${immersiveMode && quizMode === "bb_pairs" ? "space-y-2 rounded-2xl p-4" : "space-y-4 rounded-[28px] p-6"} bg-slate-50/80`}>
                         <div className="text-sm font-medium text-slate-500">题目</div>
-                        <div className="text-4xl font-semibold tracking-tight text-slate-950 md:text-5xl">{quizQuestion.promptWord}</div>
-                        <div className="rounded-[24px] bg-white p-4 text-slate-700 leading-7 shadow-sm">
+                        <div className={`${immersiveMode && quizMode === "bb_pairs" ? "text-3xl" : "text-4xl md:text-5xl"} font-semibold tracking-tight text-slate-950`}>{quizQuestion.promptWord}</div>
+                        <div className={`${immersiveMode && quizMode === "bb_pairs" ? "rounded-xl px-3 py-2 text-sm leading-6" : "rounded-[24px] p-4 leading-7"} bg-white text-slate-700 shadow-sm`}>
                           {quizHintMode === "study" ? <div><span className="font-medium">中文提示：</span>{quizQuestion.promptZh || "—"}</div> : null}
                           {quizHintMode === "study" && quizMode !== "bb_pairs" ? <div className="mt-2"><span className="font-medium">English hint：</span>{quizQuestion.promptEn || "—"}</div> : null}
                         </div>
@@ -3196,7 +3196,7 @@ function openHomeSection(source = "unknown") {
                           const isCorrect = quizChecked && choice === quizQuestion.correctAnswer;
                           const isWrongSelected = quizChecked && isSelected && choice !== quizQuestion.correctAnswer;
                           return (
-                            <button key={choice} type="button" disabled={quizChecked} onClick={() => setSelectedChoice(choice)} className={`min-h-20 rounded-[24px] border px-5 py-4 text-left transition ${isCorrect ? "border-emerald-500 bg-emerald-50 shadow-[0_16px_40px_-24px_rgba(16,185,129,0.6)]" : isWrongSelected ? "border-rose-500 bg-rose-50 shadow-[0_16px_40px_-24px_rgba(244,63,94,0.55)]" : isSelected ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white hover:-translate-y-0.5 hover:bg-slate-50"}`}>
+                            <button key={choice} type="button" disabled={quizChecked} onClick={() => setSelectedChoice(choice)} className={`${immersiveMode && quizMode === "bb_pairs" ? "min-h-14 rounded-2xl px-4 py-2" : "min-h-20 rounded-[24px] px-5 py-4"} border text-left transition ${isCorrect ? "border-emerald-500 bg-emerald-50 shadow-[0_16px_40px_-24px_rgba(16,185,129,0.6)]" : isWrongSelected ? "border-rose-500 bg-rose-50 shadow-[0_16px_40px_-24px_rgba(244,63,94,0.55)]" : isSelected ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white hover:-translate-y-0.5 hover:bg-slate-50"}`}>
                               <div className="flex items-center gap-3">
                                 {immersiveMode && quizMode === "bb_pairs" ? (
                                   <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-700">{choiceIndex + 1}</span>
@@ -3208,11 +3208,28 @@ function openHomeSection(source = "unknown") {
                         })}
                       </div>
                       {pairExplainCard && quizMode === "bb_pairs" && quizHintMode === "study" ? (
-                        <div className={`rounded-[28px] border p-5 ${
+                        <div className={`${immersiveMode ? "rounded-2xl p-3" : "rounded-[28px] p-5"} border ${
                           pairExplainCard.isCorrect
                             ? "border-emerald-200 bg-emerald-50 text-emerald-900"
                             : "border-rose-200 bg-rose-50 text-rose-900"
                         }`}>
+                          {immersiveMode ? (
+                            <div className="grid items-center gap-3 md:grid-cols-[auto_minmax(0,1fr)_minmax(0,1.35fr)]">
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline" className="rounded-full bg-white/70">{pairExplainCard.isCorrect ? "答对了" : "答错了"}</Badge>
+                                <span className="whitespace-nowrap text-xl font-semibold">{pairExplainCard.a} = {pairExplainCard.b}</span>
+                              </div>
+                              <div className="min-w-0 rounded-xl bg-white/75 px-3 py-2 text-xs leading-5 text-slate-700">
+                                <span className="font-semibold">{pairExplainCard.a}</span>：{pairExplainCard.aMeaning || pairExplainCard.zh || "暂无释义"}<br />
+                                <span className="font-semibold">{pairExplainCard.b}</span>：{pairExplainCard.bMeaning || pairExplainCard.zh || "暂无释义"}
+                              </div>
+                              <div className="min-w-0 rounded-xl bg-white/75 px-3 py-2 text-xs leading-5 text-slate-700">
+                                <span className="font-semibold">共同意思：</span>{pairExplainCard.zh || "—"}<br />
+                                你的选择：{pairExplainCard.selectedAnswer} · 正确答案：{pairExplainCard.correctAnswer}
+                              </div>
+                            </div>
+                          ) : (
+                            <>
                           <div className="flex flex-wrap items-center justify-between gap-3">
                             <div className="text-sm font-medium">
                               {pairExplainCard.isCorrect ? "答对了" : "答错了"}
@@ -3251,6 +3268,8 @@ function openHomeSection(source = "unknown") {
                               </div>
                             </div>
                           </div>
+                            </>
+                          )}
                         </div>
                       ) : quizChecked ? (
                         <div className={`rounded-[24px] border p-5 ${
@@ -3265,7 +3284,7 @@ function openHomeSection(source = "unknown") {
                           <div className="mt-2 text-sm leading-7">{quizQuestion.explanation}</div>
                         </div>
                       ) : null}
-                                            <div className="flex flex-wrap items-center justify-between gap-3 pt-4">
+                                            <div className={`flex flex-wrap items-center justify-between gap-3 ${immersiveMode && quizMode === "bb_pairs" ? "pt-1" : "pt-4"}`}>
                         <Button variant="outline" className="rounded-2xl border-slate-200 bg-white" onClick={nextQuizQuestion}>Skip</Button>
                         <div className="flex gap-2">
                           <Button variant="outline" className="rounded-2xl border-slate-200 bg-white" disabled={!selectedChoice || quizChecked} onClick={() => checkQuizAnswer()}>Check</Button>

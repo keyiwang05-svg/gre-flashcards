@@ -2807,10 +2807,11 @@ function openHomeSection(source = "unknown") {
   const isFlashcardsSection = activeSection === "flashcards";
   const isPairsSection = activeSection === "pairs";
   const isRecordsSection = activeSection === "records";
+  const isCompactPairLayout = quizMode === "bb_pairs";
   
   return (
-    <div className={`app-shell min-h-screen ${immersiveMode ? "bg-slate-950 p-3 md:p-5" : "p-4 md:p-8"}`}>
-      <div className={`mx-auto space-y-6 ${immersiveMode ? "max-w-6xl" : "max-w-7xl"}`}>
+    <div className={`app-shell ${immersiveMode ? "fixed inset-0 z-50 h-screen overflow-hidden bg-slate-950 p-3" : "min-h-screen p-4 md:p-8"}`}>
+      <div className={`mx-auto ${immersiveMode ? "h-full max-w-none space-y-3" : "max-w-7xl space-y-6"}`}>
         {storageMessage ? (
           <Card className="rounded-2xl border-amber-300 bg-amber-50 shadow-sm">
             <CardContent className="p-5 text-sm text-amber-900 whitespace-pre-line">{storageMessage}</CardContent>
@@ -2824,7 +2825,7 @@ function openHomeSection(source = "unknown") {
           <Button variant={isRecordsSection ? "default" : "ghost"} className={`rounded-2xl px-4 ${isRecordsSection ? "bg-cyan-700 hover:bg-cyan-800" : ""}`} onClick={() => openRecordsSection("top_nav")}>记录</Button>
         </div> : null}
 
-        <section className={immersiveMode ? "space-y-4" : isHomeSection ? "space-y-6" : isRecordsSection ? "space-y-6" : "grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)]"}>
+        <section className={immersiveMode ? "h-full min-h-0 space-y-3" : isHomeSection ? "space-y-6" : isRecordsSection ? "space-y-6" : "grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)]"}>
           {isHomeSection ? <Card className="overflow-hidden rounded-[32px] border-0 bg-gradient-to-br from-sky-950 via-cyan-900 to-indigo-950 text-white shadow-[0_30px_80px_-45px_rgba(15,23,42,0.85)]">
             <CardContent className="p-6 md:p-8">
               <div className="grid gap-6 lg:grid-cols-[minmax(0,1.05fr)_280px]">
@@ -3146,7 +3147,7 @@ function openHomeSection(source = "unknown") {
             </CardContent>
           </Card> : null}
 
-          {!isHomeSection ? <div className="space-y-6">
+          {!isHomeSection ? <div className={immersiveMode ? "flex h-full min-h-0 flex-col gap-3" : "space-y-6"}>
             {!isRecordsSection ? (studyView === "flashcards" ? (
               <>
                 <Card className="rounded-[28px] border border-slate-200/70 bg-white/90 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.28)]">
@@ -3292,11 +3293,11 @@ function openHomeSection(source = "unknown") {
               </>
             ) : (
               <>
-                <Card className={`rounded-[28px] border border-slate-200/70 bg-white/90 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.28)] ${immersiveMode && quizMode === "bb_pairs" ? "rounded-2xl" : ""}`}>
-                  <CardContent className={`${immersiveMode && quizMode === "bb_pairs" ? "p-3" : "p-5"} flex flex-wrap items-center justify-between gap-3`}>
-                    <div>
-                      <div className="text-sm text-slate-500">GRE Quiz Mode</div>
-                      <div className="mt-1 text-lg font-semibold">{quizMode === "equivalence" ? "等价词训练" : quizMode === "antonym" ? "反义关系训练" : "BB 六选二训练"}</div>
+                <Card className={`border border-slate-200/70 bg-white/90 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.28)] ${isCompactPairLayout ? "shrink-0 rounded-2xl" : "rounded-[28px]"}`}>
+                  <CardContent className={`${isCompactPairLayout ? "px-4 py-2" : "p-5"} flex flex-wrap items-center justify-between gap-3`}>
+                    <div className={isCompactPairLayout ? "flex items-center gap-2" : ""}>
+                      <div className={`${isCompactPairLayout ? "text-xs font-medium uppercase tracking-[0.16em]" : "text-sm"} text-slate-500`}>{isCompactPairLayout ? "GRE" : "GRE Quiz Mode"}</div>
+                      <div className={`${isCompactPairLayout ? "text-base" : "mt-1 text-lg"} font-semibold`}>{quizMode === "equivalence" ? "等价词训练" : quizMode === "antonym" ? "反义关系训练" : "BB 六选二训练"}</div>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge variant="outline" className="rounded-full border-slate-200 bg-white px-3 py-1">{quizMode === "bb_pairs" ? `${filteredPairs.length || sixChoicePairs.length} pairs in pool` : `${filteredWords.length || words.length} words in pool`}</Badge>
@@ -3311,23 +3312,32 @@ function openHomeSection(source = "unknown") {
                 </Card>
 
                 {quizQuestion ? (
-                  <Card className={`${immersiveMode && quizMode === "bb_pairs" ? "min-h-0 rounded-2xl" : "min-h-[620px] rounded-[34px]"} border border-slate-200/80 bg-white/94 shadow-[0_36px_80px_-54px_rgba(15,23,42,0.55)]`}>
-                    <CardContent className={`${immersiveMode && quizMode === "bb_pairs" ? "space-y-3 p-4" : "space-y-6 p-6 md:p-8"}`}>
+                  <Card className={`${isCompactPairLayout ? `${immersiveMode ? "flex-1 overflow-hidden" : "min-h-0"} rounded-2xl` : "min-h-[620px] rounded-[34px]"} border border-slate-200/80 bg-white/94 shadow-[0_36px_80px_-54px_rgba(15,23,42,0.55)]`}>
+                    <CardContent className={`${isCompactPairLayout ? `${immersiveMode ? "flex h-full flex-col justify-center overflow-y-auto" : ""} space-y-3 p-4` : "space-y-6 p-6 md:p-8"}`}>
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div className="flex flex-wrap items-center gap-3">
                           <Badge className="rounded-full bg-cyan-100 text-cyan-900"><Target className="mr-2 h-4 w-4" /> {quizMode === "equivalence" ? "Text Completion / Equivalence" : quizMode === "antonym" ? "Opposite Logic" : "BB Six-Choice Pairing"}</Badge>
                           {quizHintMode === "study" && quizQuestion.frequency ? <Badge variant="outline" className="rounded-full border-slate-200 bg-white">{quizQuestion.frequency}</Badge> : null}
                         </div>
-                        {immersiveMode && quizMode === "bb_pairs" ? (
-                          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-6 text-slate-600">
-                            1–6 选择 · Enter 确认 / 下一题 · S 跳过 · Esc 退出
+                        {quizMode === "bb_pairs" ? (
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            {companionEnabled ? (
+                              <div className="w-full max-w-sm">
+                                <StudyCompanion mood={companionMood} message={companionMessage} profile={companionProfile} compact />
+                              </div>
+                            ) : null}
+                            {immersiveMode ? (
+                              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
+                                1–6 选择 · Enter 确认 / 下一题 · S 跳过 · Esc 退出
+                              </div>
+                            ) : null}
                           </div>
                         ) : null}
                       </div>
-                      <div className={`${immersiveMode && quizMode === "bb_pairs" ? "space-y-2 rounded-2xl p-4" : "space-y-4 rounded-[28px] p-6"} bg-slate-50/80`}>
-                        <div className="text-sm font-medium text-slate-500">题目</div>
-                        <div className={`${immersiveMode && quizMode === "bb_pairs" ? "text-3xl" : "text-4xl md:text-5xl"} font-semibold tracking-tight text-slate-950`}>{quizQuestion.promptWord}</div>
-                        <div className={`${immersiveMode && quizMode === "bb_pairs" ? "rounded-xl px-3 py-2 text-sm leading-6" : "rounded-[24px] p-4 leading-7"} bg-white text-slate-700 shadow-sm`}>
+                      <div className={`${isCompactPairLayout ? quizChecked ? "flex items-center gap-3 rounded-2xl p-3" : "space-y-2 rounded-2xl p-4" : "space-y-4 rounded-[28px] p-6"} bg-slate-50/80`}>
+                        <div className={`${isCompactPairLayout && quizChecked ? "hidden" : "text-sm"} font-medium text-slate-500`}>题目</div>
+                        <div className={`${isCompactPairLayout ? quizChecked ? "shrink-0 text-2xl" : "text-3xl" : "text-4xl md:text-5xl"} font-semibold tracking-tight text-slate-950`}>{quizQuestion.promptWord}</div>
+                        <div className={`${isCompactPairLayout ? quizChecked ? "min-w-0 flex-1 rounded-xl px-3 py-2 text-xs leading-5" : "rounded-xl px-3 py-2 text-sm leading-6" : "rounded-[24px] p-4 leading-7"} bg-white text-slate-700 shadow-sm`}>
                           {quizHintMode === "study" ? <div><span className="font-medium">中文提示：</span>{quizQuestion.promptZh || "—"}</div> : null}
                           {quizHintMode === "study" && quizMode !== "bb_pairs" ? <div className="mt-2"><span className="font-medium">English hint：</span>{quizQuestion.promptEn || "—"}</div> : null}
                         </div>
@@ -3338,9 +3348,9 @@ function openHomeSection(source = "unknown") {
                           const isCorrect = quizChecked && choice === quizQuestion.correctAnswer;
                           const isWrongSelected = quizChecked && isSelected && choice !== quizQuestion.correctAnswer;
                           return (
-                            <button key={choice} type="button" disabled={quizChecked} onClick={() => setSelectedChoice(choice)} className={`${immersiveMode && quizMode === "bb_pairs" ? "min-h-14 rounded-2xl px-4 py-2" : "min-h-20 rounded-[24px] px-5 py-4"} border text-left transition ${isCorrect ? "border-emerald-500 bg-emerald-50 shadow-[0_16px_40px_-24px_rgba(16,185,129,0.6)]" : isWrongSelected ? "border-rose-500 bg-rose-50 shadow-[0_16px_40px_-24px_rgba(244,63,94,0.55)]" : isSelected ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white hover:-translate-y-0.5 hover:bg-slate-50"}`}>
+                            <button key={choice} type="button" disabled={quizChecked} onClick={() => setSelectedChoice(choice)} className={`${isCompactPairLayout ? "min-h-14 rounded-2xl px-4 py-2" : "min-h-20 rounded-[24px] px-5 py-4"} border text-left transition ${isCorrect ? "border-emerald-500 bg-emerald-50 shadow-[0_16px_40px_-24px_rgba(16,185,129,0.6)]" : isWrongSelected ? "border-rose-500 bg-rose-50 shadow-[0_16px_40px_-24px_rgba(244,63,94,0.55)]" : isSelected ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white hover:-translate-y-0.5 hover:bg-slate-50"}`}>
                               <div className="flex items-center gap-3">
-                                {immersiveMode && quizMode === "bb_pairs" ? (
+                                {isCompactPairLayout ? (
                                   <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-700">{choiceIndex + 1}</span>
                                 ) : <PencilLine className="h-4 w-4 text-slate-500" />}
                                 <span className="text-base font-medium leading-7">{choice}</span>
@@ -3355,7 +3365,7 @@ function openHomeSection(source = "unknown") {
                             ? "border-emerald-200 bg-emerald-50 text-emerald-900"
                             : "border-rose-200 bg-rose-50 text-rose-900"
                         }`}>
-                          {immersiveMode ? (
+                          {isCompactPairLayout ? (
                             <div className="grid items-center gap-3 md:grid-cols-[auto_minmax(0,1fr)_minmax(0,1.35fr)]">
                               <div className="flex items-center gap-2">
                                 <Badge variant="outline" className="rounded-full bg-white/70">{pairExplainCard.isCorrect ? "答对了" : "答错了"}</Badge>
@@ -3426,7 +3436,7 @@ function openHomeSection(source = "unknown") {
                           <div className="mt-2 text-sm leading-7">{quizQuestion.explanation}</div>
                         </div>
                       ) : null}
-                                            <div className={`flex flex-wrap items-center justify-between gap-3 ${immersiveMode && quizMode === "bb_pairs" ? "pt-1" : "pt-4"}`}>
+                                            <div className={`flex flex-wrap items-center justify-between gap-3 ${isCompactPairLayout ? "pt-1" : "pt-4"}`}>
                         <Button variant="outline" className="rounded-2xl border-slate-200 bg-white" onClick={nextQuizQuestion}>Skip</Button>
                         <div className="flex gap-2">
                           <Button variant="outline" className="rounded-2xl border-slate-200 bg-white" disabled={!selectedChoice || quizChecked} onClick={() => checkQuizAnswer()}>Check</Button>

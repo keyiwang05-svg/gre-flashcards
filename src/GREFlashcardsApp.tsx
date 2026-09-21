@@ -913,6 +913,9 @@ export default function GREFlashcardsApp() {
   const [quizQuestion, setQuizQuestion] = useState(null);
   const [selectedChoice, setSelectedChoice] = useState("");
   const [quizChecked, setQuizChecked] = useState(false);
+  const quizQuestionRef = useRef(null);
+  const selectedChoiceRef = useRef("");
+  const quizCheckedRef = useRef(false);
   const [pairExplainCard, setPairExplainCard] = useState(null);
   const [retrievalInput, setRetrievalInput] = useState("");
   const [storageReady, setStorageReady] = useState(false);
@@ -950,6 +953,10 @@ export default function GREFlashcardsApp() {
 const restoredFlashcardStateRef = useRef(null);
 const shouldRebuildDeckRef = useRef(true);
 const sectionEntrySourceRef = useRef("initial_load");
+
+  quizQuestionRef.current = quizQuestion;
+  selectedChoiceRef.current = selectedChoice;
+  quizCheckedRef.current = quizChecked;
 
   useEffect(() => {
     trackPageView("home");
@@ -2125,6 +2132,44 @@ function recordFlashcardResult(
     return () => window.removeEventListener("keydown", handleImmersiveKey);
   }, [immersiveMode, activeSection, studyView, currentWord?.id, flipped, revealLevel, sessionOrder.length, currentIndex]);
 
+  useEffect(() => {
+    if (!immersiveMode || activeSection !== "pairs" || studyView !== "quiz" || quizMode !== "bb_pairs") return;
+
+    const handlePairImmersiveKey = (event) => {
+      const target = event.target;
+      const isTyping = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable;
+      if (isTyping || event.repeat) return;
+
+      const activeQuizQuestion = quizQuestionRef.current;
+      const choiceIndex = Number(event.key) - 1;
+      const isChoiceKey = Number.isInteger(choiceIndex) && choiceIndex >= 0 && choiceIndex < (activeQuizQuestion?.choices?.length || 0);
+      const isHandledKey = isChoiceKey || ["Enter", "Escape", "s", "S", "f", "F"].includes(event.key);
+      if (isHandledKey) event.preventDefault();
+
+      if (isChoiceKey && !quizCheckedRef.current) {
+        selectedChoiceRef.current = activeQuizQuestion.choices[choiceIndex];
+        setSelectedChoice(activeQuizQuestion.choices[choiceIndex]);
+        return;
+      }
+
+      if (event.key === "Enter") {
+        if (quizCheckedRef.current) nextQuizQuestion();
+        else if (selectedChoiceRef.current) checkQuizAnswer(selectedChoiceRef.current);
+        return;
+      }
+
+      if (event.key === "s" || event.key === "S") nextQuizQuestion();
+      if (event.key === "Escape") exitImmersiveMode();
+      if (event.key === "f" || event.key === "F") {
+        if (document.fullscreenElement) document.exitFullscreen?.();
+        else document.documentElement.requestFullscreen?.();
+      }
+    };
+
+    window.addEventListener("keydown", handlePairImmersiveKey);
+    return () => window.removeEventListener("keydown", handlePairImmersiveKey);
+  }, [immersiveMode, activeSection, studyView, quizMode, quizQuestion, selectedChoice, quizChecked]);
+
   function toggleFavoriteWord(wordId) {
     setWords((prev) => prev.map((w) => (w.id === wordId ? { ...w, favorite: !w.favorite } : w)));
   }
@@ -2250,7 +2295,9 @@ function recordFlashcardResult(
   const answeredAt = Date.now();
 
   setSelectedChoice(effectiveChoice);
+  selectedChoiceRef.current = effectiveChoice;
   setQuizChecked(true);
+  quizCheckedRef.current = true;
 
   track(isCorrect ? "quiz_answer_correct" : "quiz_answer_wrong", {
     quiz_mode: quizMode,
@@ -2357,8 +2404,11 @@ function nextQuizQuestion() {
   );
 
   setQuizQuestion(q);
+  quizQuestionRef.current = q;
   setSelectedChoice("");
+  selectedChoiceRef.current = "";
   setQuizChecked(false);
+  quizCheckedRef.current = false;
 }
 
 function openFlashcardsSection(filter = "task", nextFlashcardMode = flashcardMode, nextMode = "all", source = "unknown") {
@@ -3106,16 +3156,31 @@ function openHomeSection(source = "unknown") {
                       <div className="text-sm text-slate-500">GRE Quiz Mode</div>
                       <div className="mt-1 text-lg font-semibold">{quizMode === "equivalence" ? "等价词训练" : quizMode === "antonym" ? "反义关系训练" : "BB 六选二训练"}</div>
                     </div>
-                    <Badge variant="outline" className="rounded-full border-slate-200 bg-white px-3 py-1">{quizMode === "bb_pairs" ? `${filteredPairs.length || sixChoicePairs.length} pairs in pool` : `${filteredWords.length || words.length} words in pool`}</Badge>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline" className="rounded-full border-slate-200 bg-white px-3 py-1">{quizMode === "bb_pairs" ? `${filteredPairs.length || sixChoicePairs.length} pairs in pool` : `${filteredWords.length || words.length} words in pool`}</Badge>
+                      {quizMode === "bb_pairs" ? (
+                        <Button variant="outline" size="sm" className="rounded-full" onClick={immersiveMode ? exitImmersiveMode : enterImmersiveMode}>
+                          {immersiveMode ? <Minimize2 className="mr-2 h-4 w-4" /> : <Maximize2 className="mr-2 h-4 w-4" />}
+                          {immersiveMode ? "退出沉浸" : "沉浸模式"}
+                        </Button>
+                      ) : null}
+                    </div>
                   </CardContent>
                 </Card>
 
                 {quizQuestion ? (
                   <Card className="min-h-[620px] rounded-[34px] border border-slate-200/80 bg-white/94 shadow-[0_36px_80px_-54px_rgba(15,23,42,0.55)]">
                     <CardContent className="p-6 md:p-8 space-y-6">
-                      <div className="flex flex-wrap items-center gap-3">
-                        <Badge className="rounded-full bg-cyan-100 text-cyan-900"><Target className="mr-2 h-4 w-4" /> {quizMode === "equivalence" ? "Text Completion / Equivalence" : quizMode === "antonym" ? "Opposite Logic" : "BB Six-Choice Pairing"}</Badge>
-                        {quizHintMode === "study" && quizQuestion.frequency ? <Badge variant="outline" className="rounded-full border-slate-200 bg-white">{quizQuestion.frequency}</Badge> : null}
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <Badge className="rounded-full bg-cyan-100 text-cyan-900"><Target className="mr-2 h-4 w-4" /> {quizMode === "equivalence" ? "Text Completion / Equivalence" : quizMode === "antonym" ? "Opposite Logic" : "BB Six-Choice Pairing"}</Badge>
+                          {quizHintMode === "study" && quizQuestion.frequency ? <Badge variant="outline" className="rounded-full border-slate-200 bg-white">{quizQuestion.frequency}</Badge> : null}
+                        </div>
+                        {immersiveMode && quizMode === "bb_pairs" ? (
+                          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-6 text-slate-600">
+                            1–6 选择 · Enter 确认 / 下一题 · S 跳过 · Esc 退出
+                          </div>
+                        ) : null}
                       </div>
                       <div className="space-y-4 rounded-[28px] bg-slate-50/80 p-6">
                         <div className="text-sm font-medium text-slate-500">题目</div>
@@ -3126,13 +3191,18 @@ function openHomeSection(source = "unknown") {
                         </div>
                       </div>
                       <div className={`grid gap-3 ${quizMode === "bb_pairs" ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
-                        {quizQuestion.choices.map((choice) => {
+                        {quizQuestion.choices.map((choice, choiceIndex) => {
                           const isSelected = selectedChoice === choice;
                           const isCorrect = quizChecked && choice === quizQuestion.correctAnswer;
                           const isWrongSelected = quizChecked && isSelected && choice !== quizQuestion.correctAnswer;
                           return (
                             <button key={choice} type="button" disabled={quizChecked} onClick={() => setSelectedChoice(choice)} className={`min-h-20 rounded-[24px] border px-5 py-4 text-left transition ${isCorrect ? "border-emerald-500 bg-emerald-50 shadow-[0_16px_40px_-24px_rgba(16,185,129,0.6)]" : isWrongSelected ? "border-rose-500 bg-rose-50 shadow-[0_16px_40px_-24px_rgba(244,63,94,0.55)]" : isSelected ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white hover:-translate-y-0.5 hover:bg-slate-50"}`}>
-                              <div className="flex items-center gap-3"><PencilLine className="h-4 w-4 text-slate-500" /><span className="text-base font-medium leading-7">{choice}</span></div>
+                              <div className="flex items-center gap-3">
+                                {immersiveMode && quizMode === "bb_pairs" ? (
+                                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-700">{choiceIndex + 1}</span>
+                                ) : <PencilLine className="h-4 w-4 text-slate-500" />}
+                                <span className="text-base font-medium leading-7">{choice}</span>
+                              </div>
                             </button>
                           );
                         })}

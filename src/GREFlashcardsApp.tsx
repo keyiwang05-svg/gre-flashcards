@@ -61,6 +61,14 @@ const DEFAULT_DAILY_PLAN = {
   quizTarget: 85,
 };
 
+const DEFAULT_COMPANION_PROFILE = {
+  xp: 0,
+  streak: 0,
+  totalReviews: 0,
+  treats: 0,
+  lastActiveDate: "",
+};
+
 const LOAD_SAVED_DATA_ERROR_MESSAGE = "读取本地进度失败，但你仍然可以继续使用。\n建议先导出一次数据备份。";
 const IDB_FALLBACK_MESSAGE = "当前浏览器不支持大容量离线缓存，已退回 localStorage 保存。大词库下仍可能超限，建议随时导出备份。";
 const PERSIST_DATA_ERROR_MESSAGE = "当前进度未成功写入本地缓存。先点 Export Progress 备份，再继续学习更稳。";
@@ -281,6 +289,44 @@ function chooseStandardEnglishVoice(voices = []) {
     .sort((a, b) => b.score - a.score);
 
   return ranked[0]?.voice || null;
+}
+
+function StudyCompanion({ mood = "ready", message, profile = DEFAULT_COMPANION_PROFILE, compact = false }) {
+  const faces = {
+    ready: "•ᴗ•",
+    happy: "˶ᵔ ᵕ ᵔ˶",
+    thinking: "• ᴗ •՞",
+    support: "˘◡˘",
+    celebrate: "✦‿✦",
+  };
+  const level = Math.floor((profile.xp || 0) / 40) + 1;
+  const levelProgress = ((profile.xp || 0) % 40) / 40 * 100;
+
+  return (
+    <div className={`flex items-center gap-3 rounded-2xl border border-cyan-200/80 bg-gradient-to-r from-cyan-50 via-white to-violet-50 shadow-sm ${compact ? "px-3 py-2" : "px-4 py-3"}`}>
+      <div className="relative shrink-0">
+        <div className={`${compact ? "h-12 w-12 text-sm" : "h-16 w-16 text-base"} flex items-center justify-center rounded-[42%_48%_44%_50%] bg-gradient-to-br from-cyan-400 via-sky-500 to-violet-500 font-bold tracking-tight text-white shadow-[0_10px_30px_-12px_rgba(14,165,233,0.9)] ring-4 ring-white transition-transform hover:-rotate-3 hover:scale-105`}>
+          {faces[mood] || faces.ready}
+        </div>
+        <span className="absolute -right-1 -top-1 rounded-full bg-slate-950 px-1.5 py-0.5 text-[9px] font-bold text-white">Lv.{level}</span>
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-semibold text-slate-900">词团 Tuan</span>
+          <Badge variant="outline" className="rounded-full border-cyan-200 bg-white/80 text-[10px] text-cyan-800">你的常驻词搭子</Badge>
+        </div>
+        <div className="mt-1 text-xs leading-5 text-slate-600">{message || "今日脑容量在线，随时可以开刷。"}</div>
+        {!compact ? (
+          <div className="mt-2 flex items-center gap-2">
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-200">
+              <div className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-violet-500 transition-all" style={{ width: `${levelProgress}%` }} />
+            </div>
+            <span className="whitespace-nowrap text-[10px] text-slate-500">{profile.xp || 0} XP · 连续 {profile.streak || 0} 天 · 🍬 {profile.treats || 0}</span>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 function inferSentiment(text) {
@@ -933,6 +979,7 @@ export default function GREFlashcardsApp() {
   const [companionEnabled, setCompanionEnabled] = useState(true);
   const [companionMood, setCompanionMood] = useState("ready");
   const [companionMessage, setCompanionMessage] = useState("我会安静地陪你刷完这一组。");
+  const [companionProfile, setCompanionProfile] = useState(DEFAULT_COMPANION_PROFILE);
   const fileRef = useRef(null);
   const persistTimeoutRef = useRef(null);
   const flashcardSessionRef = useRef<{
@@ -1071,6 +1118,7 @@ const sectionEntrySourceRef = useRef("initial_load");
         setAutoPronounce(parsed.preferences?.autoPronounce ?? true);
         setCompanionEnabled(parsed.preferences?.companionEnabled ?? true);
         setLearnedReviewCount(parsed.preferences?.learnedReviewCount || 20);
+        setCompanionProfile({ ...DEFAULT_COMPANION_PROFILE, ...(parsed.companionProfile || {}) });
         try {
   const savedFlashcardState =
     typeof window !== "undefined"
@@ -1156,6 +1204,7 @@ const sectionEntrySourceRef = useRef("initial_load");
         taskGoals,
         dailyPlan,
         preferences: { autoPronounce, companionEnabled, learnedReviewCount },
+        companionProfile,
       };
 
       Promise.resolve()
@@ -1188,7 +1237,7 @@ const sectionEntrySourceRef = useRef("initial_load");
     return () => {
       if (persistTimeoutRef.current) clearTimeout(persistTimeoutRef.current);
     };
-  }, [words, sixChoicePairs, sessionStats, dailyStats, dailyStudyLogs, taskGoals, dailyPlan, autoPronounce, companionEnabled, learnedReviewCount, storageReady]);
+  }, [words, sixChoicePairs, sessionStats, dailyStats, dailyStudyLogs, taskGoals, dailyPlan, autoPronounce, companionEnabled, learnedReviewCount, companionProfile, storageReady]);
 
   const wrongWordBook = useMemo(() => words.filter((w) => (w.stats?.unknown || 0) > 0 || (w.stats?.quizWrong || 0) > 0), [words]);
   const reviewCandidateWords = useMemo(() => words.filter((w) => Boolean(w.reviewState?.pending)), [words]);
@@ -1957,6 +2006,52 @@ function recordFlashcardResult(
     setRetrievalInput("");
   }
 
+  function rewardCompanion(eventType, sessionCount = 0) {
+    if (!companionEnabled) return;
+    const rewardMap = { known: 4, fuzzy: 2, unknown: 1, pair_correct: 5, pair_wrong: 2 };
+    const reward = rewardMap[eventType] || 1;
+    const today = formatDate(Date.now());
+    const yesterdayDate = new Date();
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterday = formatDate(yesterdayDate.getTime());
+
+    setCompanionProfile((previous) => {
+      const nextXp = (previous.xp || 0) + reward;
+      const nextReviews = (previous.totalReviews || 0) + 1;
+      const nextStreak = previous.lastActiveDate === today
+        ? previous.streak || 1
+        : previous.lastActiveDate === yesterday
+          ? (previous.streak || 0) + 1
+          : 1;
+      const earnedTreat = Math.floor(nextXp / 25) > Math.floor((previous.xp || 0) / 25);
+      return {
+        ...previous,
+        xp: nextXp,
+        totalReviews: nextReviews,
+        streak: nextStreak,
+        treats: (previous.treats || 0) + (earnedTreat ? 1 : 0),
+        lastActiveDate: today,
+      };
+    });
+
+    if (sessionCount > 0 && sessionCount % 10 === 0) {
+      setCompanionMood("celebrate");
+      setCompanionMessage(`第 ${sessionCount} 张打卡！词团申请给你的脑细胞发一颗糖。`);
+    } else if (sessionCount > 0 && sessionCount % 5 === 0) {
+      setCompanionMood("celebrate");
+      setCompanionMessage(`连续拿下 ${sessionCount} 张，今天的记忆区有点热闹。`);
+    } else if (eventType === "known" || eventType === "pair_correct") {
+      setCompanionMood("happy");
+      setCompanionMessage(eventType === "pair_correct" ? "这组同义关系接住了，手感在线。" : "秒认！这词已经开始怕你了。");
+    } else if (eventType === "fuzzy") {
+      setCompanionMood("thinking");
+      setCompanionMessage("半熟也算熟，我先替你把它塞回复习队列。");
+    } else {
+      setCompanionMood("support");
+      setCompanionMessage(eventType === "pair_wrong" ? "这对词有点会演，记进错题本下次再抓。" : "不会很正常，今天见过就不算白来。");
+    }
+  }
+
   function updateWordResult(type: "known" | "fuzzy" | "unknown") {
   if (!currentWord) return;
 
@@ -2058,21 +2153,7 @@ function recordFlashcardResult(
     recordDailyProgress(delta);
     recordWordStudyLog(currentWord, type);
 
-    if (companionEnabled) {
-      if (nextSessionSeen % 5 === 0) {
-        setCompanionMood("celebrate");
-        setCompanionMessage(`这一组已经认真刷了 ${nextSessionSeen} 张，休息一下眼睛也可以。`);
-      } else if (type === "known") {
-        setCompanionMood("happy");
-        setCompanionMessage("记得很稳，继续保持这个节奏。");
-      } else if (type === "fuzzy") {
-        setCompanionMood("thinking");
-        setCompanionMessage("模糊很正常，我会把它放回复习队列。");
-      } else {
-        setCompanionMood("support");
-        setCompanionMessage("没关系，标出来就是一次有效学习。");
-      }
-    }
+    rewardCompanion(type, nextSessionSeen);
 
     if (currentIndex + 1 >= sessionOrder.length) {
       setFlashcardCompleteMessage(getFlashcardCompleteMessage());
@@ -2360,6 +2441,7 @@ function recordFlashcardResult(
     const delta = { bbPairCorrect: isCorrect ? 1 : 0, bbPairWrong: isCorrect ? 0 : 1 };
     setSessionStats((prev) => ({ ...prev, bbPairCorrect: prev.bbPairCorrect + delta.bbPairCorrect, bbPairWrong: prev.bbPairWrong + delta.bbPairWrong }));
     recordDailyProgress(delta);
+    rewardCompanion(isCorrect ? "pair_correct" : "pair_wrong", (sessionStats.bbPairCorrect || 0) + (sessionStats.bbPairWrong || 0) + 1);
 
     // 不在这里换题。学习模式会停在解释卡，直到用户点击 Next Question。
     return;
@@ -2827,6 +2909,69 @@ function openHomeSection(source = "unknown") {
             </CardContent>
           </Card> : null}
 
+          {isHomeSection ? (
+            <Card className="overflow-hidden rounded-[32px] border border-cyan-100 bg-white/92 shadow-[0_28px_70px_-48px_rgba(8,145,178,0.55)]">
+              <CardContent className="p-6 md:p-8">
+                <div className="grid items-center gap-7 lg:grid-cols-[minmax(0,1.2fr)_380px]">
+                  <div>
+                    <Badge className="rounded-full bg-gradient-to-r from-cyan-600 to-violet-600 text-white"><Sparkles className="mr-2 h-3.5 w-3.5" />推荐体验</Badge>
+                    <h2 className="mt-4 text-3xl font-semibold tracking-tight text-slate-950 md:text-4xl">进入沉浸模式，把注意力留给单词</h2>
+                    <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-600">全屏卡片、键盘操作和标准英语发音连成一条学习流；学过的词可以随时随机抽查，词团会记录你的节奏并陪你升级。</p>
+
+                    <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                      {[
+                        ["⌨️", "全键盘沉浸", "空格展开，方向键完成判断"],
+                        ["🔊", "标准英语发音", "自动播放，也可以随时关闭"],
+                        ["🎲", "已学随机复习", "自由选择 1–500 个旧词抽查"],
+                        ["✦", "词团陪背", "等级、连续陪伴与阶段掉落"],
+                      ].map(([icon, title, description]) => (
+                        <div key={title} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                          <div className="flex items-center gap-2 text-sm font-semibold text-slate-900"><span>{icon}</span>{title}</div>
+                          <div className="mt-1 text-xs leading-5 text-slate-500">{description}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="mt-5 flex flex-wrap gap-3">
+                      <Button className="rounded-2xl bg-gradient-to-r from-cyan-700 to-violet-700 px-5 hover:from-cyan-600 hover:to-violet-600" onClick={() => {
+                        track("home_immersive_entry_click", { mode: "flashcards", source: "home_feature_showcase" });
+                        openFlashcardsSection("task", "recognition", "all", "home_immersive_showcase");
+                        enterImmersiveMode();
+                      }}><Maximize2 className="mr-2 h-4 w-4" />沉浸背今日单词</Button>
+                      <Button variant="outline" className="rounded-2xl" disabled={words.length - newWordCount <= 0} onClick={() => {
+                        track("home_immersive_entry_click", { mode: "learned_random", source: "home_feature_showcase" });
+                        openFlashcardsSection("learned_random", "recognition", "all", "home_learned_review_showcase");
+                        enterImmersiveMode();
+                      }}><Shuffle className="mr-2 h-4 w-4" />随机复习已学</Button>
+                      <Button variant="outline" className="rounded-2xl" onClick={() => {
+                        track("home_immersive_entry_click", { mode: "bb_pairs", source: "home_feature_showcase" });
+                        openPairsSection("mix", "home_immersive_showcase");
+                        enterImmersiveMode();
+                      }}>沉浸六选二</Button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-[28px] border border-cyan-100 bg-gradient-to-br from-cyan-50 via-white to-violet-100 p-5">
+                    <div className="mb-3 flex items-center justify-between">
+                      <div>
+                        <div className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-700">Study Companion</div>
+                        <div className="mt-1 text-lg font-semibold text-slate-950">词团今天也已上线</div>
+                      </div>
+                      <Badge variant="outline" className="rounded-full bg-white">本体唯一</Badge>
+                    </div>
+                    <StudyCompanion mood={companionMood} message={companionMessage} profile={companionProfile} />
+                    <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+                      <div className="rounded-xl bg-white/80 p-3"><div className="font-semibold text-slate-900">+4 XP</div><div className="mt-1 text-slate-500">认识</div></div>
+                      <div className="rounded-xl bg-white/80 p-3"><div className="font-semibold text-slate-900">+2 XP</div><div className="mt-1 text-slate-500">模糊</div></div>
+                      <div className="rounded-xl bg-white/80 p-3"><div className="font-semibold text-slate-900">+5 XP</div><div className="mt-1 text-slate-500">六选二正确</div></div>
+                    </div>
+                    <div className="mt-3 rounded-xl border border-white/80 bg-white/60 px-3 py-2 text-[11px] leading-5 text-slate-500">每 40 XP 升一级 · 每累计 25 XP 掉落一颗糖 · 每天学习会延续陪伴天数</div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
+
           {!immersiveMode && !isHomeSection && !isRecordsSection ? <Card className="rounded-[28px] border border-slate-200/70 bg-white/90 shadow-[0_24px_60px_-42px_rgba(15,23,42,0.28)]">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-lg"><BookOpen className="h-5 w-5" /> {isFlashcardsSection ? "闪卡面板" : "六选二面板"}</CardTitle>
@@ -3049,11 +3194,8 @@ function openHomeSection(source = "unknown") {
                         <CardContent className="flex min-h-[560px] flex-col justify-between p-6 md:p-8">
                           <div className="mb-4 flex flex-wrap items-center justify-between gap-3" onClick={(event) => event.stopPropagation()}>
                             {companionEnabled ? (
-                              <div className="flex max-w-xl items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-                                <span className="text-2xl" role="img" aria-label="陪背伙伴">
-                                  {companionMood === "celebrate" ? "🎉" : companionMood === "happy" ? "🐣" : companionMood === "thinking" ? "🦉" : companionMood === "support" ? "🐻" : "🌱"}
-                                </span>
-                                <span>{companionMessage}</span>
+                              <div className="max-w-xl">
+                                <StudyCompanion mood={companionMood} message={companionMessage} profile={companionProfile} compact={immersiveMode} />
                               </div>
                             ) : <span />}
                             {immersiveMode ? (

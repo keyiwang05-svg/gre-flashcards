@@ -2973,7 +2973,7 @@ function openHomeSection(source = "unknown") {
             </Card>
           ) : null}
 
-          {!immersiveMode && !isHomeSection && !isRecordsSection ? <Card className="rounded-[28px] border border-slate-200/70 bg-white/90 shadow-[0_24px_60px_-42px_rgba(15,23,42,0.28)]">
+          {!immersiveMode && !isHomeSection && !isRecordsSection ? <Card className="rounded-[28px] border border-slate-200/70 bg-white/90 shadow-[0_24px_60px_-42px_rgba(15,23,42,0.28)] lg:max-h-[calc(100vh-8.5rem)] lg:overflow-y-auto">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-lg"><BookOpen className="h-5 w-5" /> {isFlashcardsSection ? "闪卡面板" : "六选二面板"}</CardTitle>
             </CardHeader>
@@ -3147,10 +3147,16 @@ function openHomeSection(source = "unknown") {
             </CardContent>
           </Card> : null}
 
-          {!isHomeSection ? <div className={immersiveMode ? "flex h-full min-h-0 flex-col gap-3" : "space-y-6"}>
+          {!isHomeSection ? <div className={
+            immersiveMode
+              ? `flex h-full min-h-0 flex-col gap-3 ${isFlashcardsSection ? "mx-auto w-full max-w-5xl" : ""}`
+              : isFlashcardsSection
+                ? "flex min-h-0 flex-col gap-4 lg:h-[calc(100vh-8.5rem)]"
+                : "space-y-6"
+          }>
             {!isRecordsSection ? (studyView === "flashcards" ? (
               <>
-                <Card className="rounded-[28px] border border-slate-200/70 bg-white/90 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.28)]">
+                <Card className="shrink-0 rounded-[24px] border border-slate-200/70 bg-white/90 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.28)]">
                   <CardContent className="p-5">
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600">
                       <div className="flex items-center gap-2">
@@ -3176,8 +3182,8 @@ function openHomeSection(source = "unknown") {
                 </Card>
 
                 {flashcardCompleteMessage ? (
-                  <Card className="rounded-[32px] border border-emerald-100 bg-white/92 shadow-[0_32px_70px_-48px_rgba(15,23,42,0.5)]">
-                    <CardContent className="flex min-h-[560px] flex-col items-center justify-center gap-5 p-8 text-center">
+                  <Card className="min-h-0 flex-1 rounded-[28px] border border-emerald-100 bg-white/92 shadow-[0_32px_70px_-48px_rgba(15,23,42,0.5)]">
+                    <CardContent className="flex h-full min-h-[360px] flex-col items-center justify-center gap-5 p-8 text-center">
                       <div className="rounded-full bg-emerald-50 px-5 py-2 text-sm font-medium text-emerald-700">Completed</div>
                       <h2 className="text-3xl font-semibold tracking-tight text-slate-900 md:text-4xl">{flashcardCompleteMessage}</h2>
                       <p className="max-w-md text-sm leading-7 text-slate-500">可以休息一下，或者回到今日计划继续其他任务。</p>
@@ -3190,13 +3196,13 @@ function openHomeSection(source = "unknown") {
                   </Card>
                 ) : currentWord ? (
                   <AnimatePresence mode="wait">
-                    <motion.div key={`${currentWord.id}-${flipped}-${revealLevel}-${currentIndex}`} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.2 }}>
-                      <Card className="min-h-[620px] cursor-pointer overflow-hidden rounded-[34px] border border-slate-200/80 bg-white/94 shadow-[0_36px_80px_-54px_rgba(15,23,42,0.55)]" onClick={() => { if (!flipped) setFlipped(true); else setRevealLevel((v) => Math.min(v + 1, 3)); }}>
-                        <CardContent className="flex min-h-[560px] flex-col justify-between p-6 md:p-8">
-                          <div className="mb-4 flex flex-wrap items-center justify-between gap-3" onClick={(event) => event.stopPropagation()}>
+                    <motion.div className="h-full min-h-0 flex-1" key={`${currentWord.id}-${flipped}-${revealLevel}-${currentIndex}`} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.2 }}>
+                      <Card className="h-full min-h-0 cursor-pointer overflow-hidden rounded-[28px] border border-slate-200/80 bg-white/94 shadow-[0_36px_80px_-54px_rgba(15,23,42,0.55)]" onClick={() => { if (!flipped) setFlipped(true); else setRevealLevel((v) => Math.min(v + 1, 3)); }}>
+                        <CardContent className="flex h-full min-h-0 flex-col p-5 md:p-6">
+                          <div className="mb-3 shrink-0 flex flex-wrap items-center justify-between gap-3" onClick={(event) => event.stopPropagation()}>
                             {companionEnabled ? (
                               <div className="max-w-xl">
-                                <StudyCompanion mood={companionMood} message={companionMessage} profile={companionProfile} compact={immersiveMode} />
+                                <StudyCompanion mood={companionMood} message={companionMessage} profile={companionProfile} compact />
                               </div>
                             ) : <span />}
                             {immersiveMode ? (
@@ -3205,8 +3211,9 @@ function openHomeSection(source = "unknown") {
                               </div>
                             ) : null}
                           </div>
+                          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
                           {!flipped ? (
-                            <div className="flex h-full min-h-[460px] flex-col items-center justify-center text-center">
+                            <div className="flex min-h-[180px] flex-1 flex-col items-center justify-center py-4 text-center">
                               {flashcardMode === "recognition" ? (
                                 <>
                                   <div className="rounded-full bg-amber-100 px-4 py-1 text-xs font-medium uppercase tracking-[0.24em] text-amber-900">Tap To Reveal</div>
@@ -3270,8 +3277,9 @@ function openHomeSection(source = "unknown") {
                               ))}
                             </div>
                           )}
+                          </div>
 
-                          <div className="mt-8 grid gap-4 rounded-[28px] border border-slate-200 bg-white/80 p-4 md:grid-cols-[1fr_auto]">
+                          <div className="mt-3 shrink-0 grid gap-3 rounded-2xl border border-slate-200 bg-white/90 p-3 md:grid-cols-[1fr_auto]">
                             <div className="flex flex-wrap gap-2">
                               <Button variant="outline" className="rounded-2xl border-slate-200 bg-white" onClick={(e) => { e.stopPropagation(); goPrev(); }}>Previous</Button>
                               <Button variant="outline" className="rounded-2xl border-slate-200 bg-white px-5" onClick={(e) => { e.stopPropagation(); if (!flipped) setFlipped(true); else setRevealLevel((v) => Math.min(v + 1, 3)); }}><Eye className="mr-2 h-4 w-4" /> {!flipped ? "显示释义" : nextRevealLabel}</Button>
@@ -3288,7 +3296,7 @@ function openHomeSection(source = "unknown") {
                     </motion.div>
                   </AnimatePresence>
                 ) : (
-                  <Card className="rounded-[28px] shadow-sm"><CardContent className="flex min-h-[460px] flex-col items-center justify-center p-8 text-center"><div className="rounded-full bg-slate-100 p-4"><Trash2 className="h-8 w-8 text-slate-500" /></div><h3 className="mt-4 text-2xl font-semibold">No cards in this filter</h3></CardContent></Card>
+                  <Card className="min-h-0 flex-1 rounded-[28px] shadow-sm"><CardContent className="flex h-full min-h-[360px] flex-col items-center justify-center p-8 text-center"><div className="rounded-full bg-slate-100 p-4"><Trash2 className="h-8 w-8 text-slate-500" /></div><h3 className="mt-4 text-2xl font-semibold">No cards in this filter</h3></CardContent></Card>
                 )}
               </>
             ) : (

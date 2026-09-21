@@ -3361,7 +3361,7 @@ function openHomeSection(source = "unknown") {
               </>
             ) : (
               <>
-                <Card className={`border border-slate-200/70 bg-white/90 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.28)] ${isCompactPairLayout ? "shrink-0 rounded-2xl" : "rounded-[28px]"}`}>
+                {(!isCompactPairLayout || immersiveMode) ? <Card className={`border border-slate-200/70 bg-white/90 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.28)] ${isCompactPairLayout ? "shrink-0 rounded-2xl" : "rounded-[28px]"}`}>
                   <CardContent className={`${isCompactPairLayout ? "px-4 py-2" : "p-5"} flex flex-wrap items-center justify-between gap-3`}>
                     <div className={isCompactPairLayout ? "flex items-center gap-2" : ""}>
                       <div className={`${isCompactPairLayout ? "text-xs font-medium uppercase tracking-[0.16em]" : "text-sm"} text-slate-500`}>{isCompactPairLayout ? "GRE" : "GRE Quiz Mode"}</div>
@@ -3377,7 +3377,7 @@ function openHomeSection(source = "unknown") {
                       ) : null}
                     </div>
                   </CardContent>
-                </Card>
+                </Card> : null}
 
                 {quizQuestion ? (
                   <Card className={`${isCompactPairLayout ? `${immersiveMode ? "flex-1 overflow-hidden" : "min-h-0"} rounded-2xl` : "min-h-[620px] rounded-[34px]"} border border-slate-200/80 bg-white/94 shadow-[0_36px_80px_-54px_rgba(15,23,42,0.55)]`}>
@@ -3389,6 +3389,14 @@ function openHomeSection(source = "unknown") {
                         </div>
                         {quizMode === "bb_pairs" ? (
                           <div className="flex flex-wrap items-center justify-end gap-2">
+                            {isCompactPairLayout && !immersiveMode ? (
+                              <>
+                                <Badge variant="outline" className="rounded-full border-slate-200 bg-white px-3 py-1">{filteredPairs.length || sixChoicePairs.length} pairs in pool</Badge>
+                                <Button variant="outline" size="sm" className="rounded-full" onClick={enterImmersiveMode}>
+                                  <Maximize2 className="mr-2 h-4 w-4" />沉浸模式
+                                </Button>
+                              </>
+                            ) : null}
                             {companionEnabled ? (
                               <div className="w-full max-w-sm">
                                 <StudyCompanion mood={companionMood} message={companionMessage} profile={companionProfile} compact />

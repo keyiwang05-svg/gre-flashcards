@@ -15,6 +15,7 @@ import {
   PencilLine,
   RotateCcw,
   Search,
+  Settings2,
   Shuffle,
   Sparkles,
   Target,
@@ -973,6 +974,8 @@ export default function GREFlashcardsApp() {
   const [favoriteSummarySearch, setFavoriteSummarySearch] = useState("");
   const [studyLogTab, setStudyLogTab] = useState("words");
   const [studyLogSearch, setStudyLogSearch] = useState("");
+  const [recordsView, setRecordsView] = useState("overview");
+  const [showGoalSettings, setShowGoalSettings] = useState(false);
   const [autoPronounce, setAutoPronounce] = useState(true);
   const [learnedReviewCount, setLearnedReviewCount] = useState(20);
   const [immersiveMode, setImmersiveMode] = useState(false);
@@ -2791,6 +2794,27 @@ function openHomeSection(source = "unknown") {
 
     return streak;
   }, [dailyStats]);
+  const weeklyActivity = useMemo(() => {
+    return Array.from({ length: 7 }, (_, index) => {
+      const date = new Date();
+      date.setHours(0, 0, 0, 0);
+      date.setDate(date.getDate() - (6 - index));
+      const key = formatDate(date.getTime());
+      const stat = dailyStats[key] || {};
+      const wordsStudied = (stat.newReviewed || 0) + (stat.reviewReviewed || 0);
+      const pairsStudied = (stat.bbPairCorrect || 0) + (stat.bbPairWrong || 0);
+      const quizTotal = (stat.quizCorrect || 0) + (stat.quizWrong || 0);
+      return {
+        key,
+        day: ["日", "一", "二", "三", "四", "五", "六"][date.getDay()],
+        wordsStudied,
+        pairsStudied,
+        quizTotal,
+        total: wordsStudied + pairsStudied + quizTotal,
+      };
+    });
+  }, [dailyStats]);
+  const weeklyMaxActivity = Math.max(1, ...weeklyActivity.map((day) => day.total));
   const homePrimaryLabel = todayWordRemaining > 0
     ? "先刷今天的单词任务"
     : todayPairRemaining > 0
@@ -3459,10 +3483,83 @@ function openHomeSection(source = "unknown") {
               </>
             )) : null}
 
-            {isRecordsSection ? <>
-            <Card className="rounded-2xl shadow-sm">
+            {isRecordsSection ? <div className="space-y-5">
+              <section className="relative overflow-hidden rounded-[30px] border border-white/80 bg-gradient-to-br from-white via-cyan-50/70 to-violet-50/70 p-5 shadow-[0_18px_60px_-30px_rgba(15,23,42,0.35)] md:p-7">
+                <div className="absolute -right-16 -top-20 h-56 w-56 rounded-full bg-cyan-200/30 blur-3xl" />
+                <div className="relative">
+                  <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <div className="text-xs font-semibold tracking-[0.2em] text-cyan-700">LEARNING ARCHIVE</div>
+                      <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">学习档案</h2>
+                      <p className="mt-2 text-sm text-slate-500">看清今天学了什么、掌握得怎么样，以及下一步该做什么。</p>
+                    </div>
+                    <Button variant="outline" className="w-fit rounded-full border-white bg-white/80 shadow-sm" onClick={() => setShowGoalSettings((value) => !value)}>
+                      <Settings2 className="mr-2 h-4 w-4" />
+                      {showGoalSettings ? "收起目标设置" : "目标设置"}
+                    </Button>
+                  </div>
+
+                  <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+                    {[
+                      { label: "连续学习", value: `${studyStreak} 天`, hint: "保持节奏", tone: "from-amber-50 to-orange-50", accent: "text-amber-700" },
+                      { label: "今日学习", value: `${todayWordStudyCount} 词`, hint: `目标 ${todayWordTarget}`, tone: "from-cyan-50 to-sky-50", accent: "text-cyan-700" },
+                      { label: "Quiz 准确率", value: todayQuizAccuracy === null ? "—" : `${todayQuizAccuracy}%`, hint: todayQuizAccuracy === null ? "今天还未测试" : `目标 ${dailyPlan.quizTarget}%`, tone: "from-emerald-50 to-teal-50", accent: "text-emerald-700" },
+                      { label: "待解决", value: `${wrongWordSummary.length + wrongPairSummary.length} 项`, hint: "单词与六选二错题", tone: "from-rose-50 to-pink-50", accent: "text-rose-700" },
+                    ].map((item) => (
+                      <div key={item.label} className={`rounded-2xl border border-white/80 bg-gradient-to-br ${item.tone} p-4 shadow-sm`}>
+                        <div className="text-xs text-slate-500">{item.label}</div>
+                        <div className={`mt-1 text-2xl font-semibold ${item.accent}`}>{item.value}</div>
+                        <div className="mt-1 text-xs text-slate-500">{item.hint}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-4 rounded-2xl border border-white/80 bg-white/65 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-800">近 7 天学习轨迹</div>
+                        <div className="mt-0.5 text-xs text-slate-500">柱高代表当天单词、六选二和 Quiz 的总练习量</div>
+                      </div>
+                      <Badge variant="outline" className="rounded-full bg-white/80">本周</Badge>
+                    </div>
+                    <div className="mt-4 grid grid-cols-7 gap-2">
+                      {weeklyActivity.map((day) => (
+                        <div key={day.key} className="flex min-w-0 flex-col items-center gap-2">
+                          <div className="flex h-16 w-full max-w-10 items-end overflow-hidden rounded-lg bg-slate-100">
+                            <div className={`w-full rounded-lg transition-all ${day.key === todayKey ? "bg-cyan-600" : day.total ? "bg-violet-300" : "bg-slate-200"}`} style={{ height: `${day.total ? Math.max(16, (day.total / weeklyMaxActivity) * 100) : 8}%` }} title={`${day.key}：${day.total} 次练习`} />
+                          </div>
+                          <div className={`text-xs ${day.key === todayKey ? "font-semibold text-cyan-700" : "text-slate-500"}`}>周{day.day}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex items-center gap-3 rounded-2xl bg-slate-900 px-4 py-3 text-white">
+                    <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white/10 text-xl">{wrongWordSummary.length + wrongPairSummary.length ? "•̀ᴗ•́" : "•ᴗ•"}</div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-semibold text-cyan-300">词团的今日观察</div>
+                      <div className="mt-0.5 text-sm text-slate-200">{wrongWordSummary.length + wrongPairSummary.length ? `还有 ${wrongWordSummary.length + wrongPairSummary.length} 项错题没解决，先清一小组会更轻松。` : todayWordRemaining > 0 ? `今天还差 ${todayWordRemaining} 个单词学习量，我陪你慢慢推完。` : "今天的状态很稳，去收藏里挑几个喜欢的词再巩固一下吧。"}</div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <div className="sticky top-3 z-20 rounded-2xl border border-white/80 bg-white/90 p-1.5 shadow-lg shadow-slate-200/50 backdrop-blur-xl">
+                <div className="grid grid-cols-4 gap-1">
+                  {[
+                    ["overview", "概览"],
+                    ["wrong", `错题 ${wrongWordSummary.length + wrongPairSummary.length}`],
+                    ["logs", "学习记录"],
+                    ["favorites", `收藏 ${favoriteWordSummary.length + favoriteSenseSummary.length}`],
+                  ].map(([value, label]) => (
+                    <button key={value} type="button" onClick={() => setRecordsView(value)} className={`rounded-xl px-2 py-2.5 text-xs font-medium transition sm:text-sm ${recordsView === value ? "bg-slate-900 text-white shadow-sm" : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"}`}>{label}</button>
+                  ))}
+                </div>
+              </div>
+
+            {showGoalSettings ? <Card className="rounded-[26px] border-amber-100 bg-amber-50/40 shadow-sm">
               <CardHeader>
-                <CardTitle className="text-lg">学习目标</CardTitle>
+                <CardTitle className="flex items-center gap-2 text-lg"><Target className="h-5 w-5 text-amber-600" />目标设置</CardTitle>
               </CardHeader>
               <CardContent className="space-y-5">
                 <div className="rounded-2xl border p-4 space-y-4">
@@ -3528,9 +3625,48 @@ function openHomeSection(source = "unknown") {
                   </div>
                 </div>
               </CardContent>
-            </Card>
+            </Card> : null}
 
-            <Card className="rounded-2xl shadow-sm">
+            {recordsView === "overview" ? (
+              <div className="grid gap-4 lg:grid-cols-3">
+                <div className="rounded-[26px] border border-cyan-100 bg-gradient-to-br from-white to-cyan-50 p-5 shadow-sm lg:col-span-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div><div className="text-sm font-semibold text-slate-900">今日推进</div><div className="mt-1 text-xs text-slate-500">任务拆成三条，完成感更清楚。</div></div>
+                    <Badge variant="outline" className={`rounded-full ${overallPlanMeta.badgeClass}`}>{overallPlanMeta.label}</Badge>
+                  </div>
+                  <div className="mt-5 space-y-4">
+                    {[
+                      { label: "单词", value: todayWordStudyCount, target: todayWordTarget, remaining: todayWordRemaining, color: "[&>div]:bg-cyan-600" },
+                      { label: "六选二", value: todayPairPracticeCount, target: todayPairTarget, remaining: todayPairRemaining, color: "[&>div]:bg-violet-500" },
+                      { label: "Quiz", value: todayQuizAccuracy || 0, target: dailyPlan.quizTarget, remaining: todayQuizAccuracy === null ? null : Math.max(0, dailyPlan.quizTarget - todayQuizAccuracy), color: "[&>div]:bg-emerald-500", suffix: "%" },
+                    ].map((item) => (
+                      <div key={item.label}>
+                        <div className="mb-1.5 flex items-center justify-between text-sm"><span className="font-medium text-slate-700">{item.label}</span><span className="text-xs text-slate-500">{item.value}{item.suffix || ""} / {item.target}{item.suffix || ""}</span></div>
+                        <Progress value={item.target ? Math.min(100, (item.value / item.target) * 100) : 100} className={`h-2 ${item.color}`} />
+                        <div className="mt-1 text-xs text-slate-500">{item.remaining === null ? "完成一次测试后会显示准确率" : item.remaining > 0 ? `还差 ${item.remaining}${item.suffix || ""}` : "今日已达标"}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-[26px] border border-violet-100 bg-gradient-to-br from-white to-violet-50 p-5 shadow-sm">
+                  <div className="text-sm font-semibold text-slate-900">下一步建议</div>
+                  <div className="mt-4 grid h-12 w-12 place-items-center rounded-2xl bg-violet-100 text-2xl">✦</div>
+                  <div className="mt-4 text-lg font-semibold text-slate-900">{wrongWordSummary.length + wrongPairSummary.length ? "先清理错题" : todayWordRemaining > 0 ? "继续今日单词" : "随机复习旧词"}</div>
+                  <p className="mt-2 text-sm leading-6 text-slate-500">{wrongWordSummary.length + wrongPairSummary.length ? "错题量不大时及时处理，最不容易积压。" : "保持短而连续的学习节奏，比一次刷很久更稳。"}</p>
+                  <Button className="mt-5 w-full rounded-2xl bg-violet-600 hover:bg-violet-700" onClick={() => {
+                    if (wrongWordSummary.length + wrongPairSummary.length) {
+                      setRecordsView("wrong");
+                      return;
+                    }
+                    sectionEntrySourceRef.current = "records_overview_recommendation";
+                    setActiveSection("flashcards");
+                    openFlashcardDeck("all", { filter: todayWordRemaining > 0 ? "all" : "learned_random", flashcardMode: "recognition" });
+                  }}>{wrongWordSummary.length + wrongPairSummary.length ? "查看错题" : "开始学习"}<ArrowRight className="ml-2 h-4 w-4" /></Button>
+                </div>
+              </div>
+            ) : null}
+
+            {recordsView === "wrong" ? <Card className="rounded-[26px] border-rose-100 bg-white/90 shadow-sm">
               <CardHeader className="space-y-4">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <CardTitle className="flex items-center gap-2 text-lg">
@@ -3628,9 +3764,9 @@ function openHomeSection(source = "unknown") {
                   )}
                 </div>
               </CardContent>
-            </Card>
+            </Card> : null}
 
-            <Card className="rounded-2xl shadow-sm">
+            {recordsView === "logs" ? <Card className="rounded-[26px] border-cyan-100 bg-white/90 shadow-sm">
               <CardHeader className="space-y-4">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <CardTitle className="flex items-center gap-2 text-lg">
@@ -3718,9 +3854,9 @@ function openHomeSection(source = "unknown") {
                   )}
                 </div>
               </CardContent>
-            </Card>
+            </Card> : null}
 
-            <Card className="rounded-2xl shadow-sm">
+            {recordsView === "favorites" ? <Card className="rounded-[26px] border-violet-100 bg-white/90 shadow-sm">
               <CardHeader className="space-y-4">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <CardTitle className="flex items-center gap-2 text-lg"><Heart className="h-5 w-5" />收藏汇总</CardTitle>
@@ -3788,8 +3924,8 @@ function openHomeSection(source = "unknown") {
                   )}
                 </div>
               </CardContent>
-            </Card>
-            </> : null}
+            </Card> : null}
+            </div> : null}
           </div> : null}
         </section>
       </div>

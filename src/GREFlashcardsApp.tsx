@@ -243,6 +243,46 @@ function sentimentLabel(value) {
   return "未标注";
 }
 
+const PREFERRED_ENGLISH_VOICE_NAMES = [
+  "samantha",
+  "ava",
+  "alex",
+  "allison",
+  "google us english",
+  "microsoft aria",
+  "microsoft jenny",
+  "microsoft guy",
+  "microsoft david",
+  "microsoft zira",
+];
+
+const NOVELTY_VOICE_MARKERS = [
+  "albert", "bad news", "bahh", "bells", "boing", "bubbles", "cellos",
+  "eddy", "flo", "fred", "good news", "jester", "junior", "kathy", "organ",
+  "ralph", "reed", "rocko", "shelley", "superstar", "trinoids", "whisper",
+  "wobble", "zarvox",
+];
+
+function chooseStandardEnglishVoice(voices = []) {
+  const ranked = voices
+    .filter((voice) => String(voice.lang || "").toLowerCase().startsWith("en"))
+    .map((voice) => {
+      const name = String(voice.name || "").toLowerCase();
+      const lang = String(voice.lang || "").toLowerCase();
+      const preferredIndex = PREFERRED_ENGLISH_VOICE_NAMES.findIndex((marker) => name.includes(marker));
+      const isNoveltyVoice = NOVELTY_VOICE_MARKERS.some((marker) => name.includes(marker));
+      let score = lang === "en-us" ? 60 : 20;
+      if (preferredIndex >= 0) score += 100 - preferredIndex * 4;
+      if (voice.default) score += 8;
+      if (voice.localService) score += 4;
+      if (isNoveltyVoice) score -= 500;
+      return { voice, score };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  return ranked[0]?.voice || null;
+}
+
 function inferSentiment(text) {
   const t = cleanText(text).toLowerCase();
   if (!t) return "";
@@ -1818,14 +1858,41 @@ function recordFlashcardResult(
 
   function speakWord(word = currentWord, source = "manual") {
     if (!word?.word || typeof window === "undefined" || !("speechSynthesis" in window)) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(word.word);
-    utterance.lang = "en-US";
-    utterance.rate = 0.88;
-    const voices = window.speechSynthesis.getVoices();
-    utterance.voice = voices.find((voice) => voice.lang === "en-US") || voices.find((voice) => voice.lang.startsWith("en")) || null;
-    window.speechSynthesis.speak(utterance);
-    track("word_pronunciation_play", { source, auto_pronounce: autoPronounce });
+    const synth = window.speechSynthesis;
+    let hasSpoken = false;
+
+    const speakWithAvailableVoices = () => {
+      if (hasSpoken) return;
+      hasSpoken = true;
+      synth.cancel();
+      const utterance = new SpeechSynthesisUtterance(word.word);
+      utterance.lang = "en-US";
+      utterance.rate = 0.95;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+      utterance.voice = chooseStandardEnglishVoice(synth.getVoices());
+      synth.speak(utterance);
+      track("word_pronunciation_play", {
+        source,
+        auto_pronounce: autoPronounce,
+        standard_voice_selected: Boolean(utterance.voice),
+      });
+    };
+
+    if (synth.getVoices().length) {
+      speakWithAvailableVoices();
+      return;
+    }
+
+    const handleVoicesChanged = () => {
+      synth.removeEventListener?.("voiceschanged", handleVoicesChanged);
+      speakWithAvailableVoices();
+    };
+    synth.addEventListener?.("voiceschanged", handleVoicesChanged, { once: true });
+    window.setTimeout(() => {
+      synth.removeEventListener?.("voiceschanged", handleVoicesChanged);
+      speakWithAvailableVoices();
+    }, 500);
   }
 
   async function enterImmersiveMode() {

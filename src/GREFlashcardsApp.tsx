@@ -3209,7 +3209,7 @@ function openHomeSection(source = "unknown") {
 
           {!isHomeSection ? <div className={
             immersiveMode
-              ? `flex h-full min-h-0 flex-col gap-3 ${isFlashcardsSection ? "mx-auto w-full max-w-5xl" : ""}`
+              ? `mx-auto flex h-full min-h-0 w-full flex-col gap-3 ${isFlashcardsSection ? "max-w-5xl" : isPairsSection ? "max-w-4xl" : ""}`
               : isFlashcardsSection
                 ? "flex min-h-0 flex-col gap-4 lg:h-[calc(100vh-8.5rem)]"
                 : "space-y-6"
@@ -3271,13 +3271,13 @@ function openHomeSection(source = "unknown") {
                               </div>
                             ) : null}
                           </div>
-                          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pr-1">
                           {!flipped ? (
-                            <div className="flex min-h-[180px] flex-1 flex-col items-center justify-center py-4 text-center">
+                            <div className={`flex min-h-[180px] flex-1 flex-col items-center justify-center text-center ${immersiveMode ? "py-0" : "py-4"}`}>
                               {flashcardMode === "recognition" ? (
                                 <>
                                   <div className="rounded-full bg-amber-100 px-4 py-1 text-xs font-medium uppercase tracking-[0.24em] text-amber-900">Tap To Reveal</div>
-                                  <h1 className="mt-8 text-5xl font-semibold tracking-tight text-slate-950 md:text-7xl">{currentWord.word}</h1>
+                                  <h1 className={`mt-8 tracking-tight text-slate-950 ${immersiveMode ? "text-6xl font-black md:text-8xl" : "text-5xl font-semibold md:text-7xl"}`}>{currentWord.word}</h1>
                                   <p className="mt-5 max-w-md text-sm leading-7 text-slate-500">先自己想一秒，再点开释义，记忆会更牢一点。</p>
                                 </>
                               ) : (

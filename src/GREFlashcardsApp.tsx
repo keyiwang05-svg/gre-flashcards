@@ -7,6 +7,7 @@ import {
   BookOpen,
   Brain,
   CheckCircle2,
+  Copy,
   Download,
   Eye,
   Flame,
@@ -976,6 +977,7 @@ export default function GREFlashcardsApp() {
   const [studyLogSearch, setStudyLogSearch] = useState("");
   const [recordsView, setRecordsView] = useState("overview");
   const [showGoalSettings, setShowGoalSettings] = useState(false);
+  const [contactCopied, setContactCopied] = useState(false);
   const [autoPronounce, setAutoPronounce] = useState(true);
   const [learnedReviewCount, setLearnedReviewCount] = useState(20);
   const [immersiveMode, setImmersiveMode] = useState(false);
@@ -2991,6 +2993,40 @@ function openHomeSection(source = "unknown") {
                       <div className="rounded-xl bg-white/80 p-3"><div className="font-semibold text-slate-900">+5 XP</div><div className="mt-1 text-slate-500">六选二正确</div></div>
                     </div>
                     <div className="mt-3 rounded-xl border border-white/80 bg-white/60 px-3 py-2 text-[11px] leading-5 text-slate-500">每 40 XP 升一级 · 每累计 25 XP 掉落一颗糖 · 每天学习会延续陪伴天数</div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
+
+          {isHomeSection ? (
+            <Card className="overflow-hidden rounded-[30px] border-0 bg-slate-950 text-white shadow-[0_26px_70px_-44px_rgba(15,23,42,0.9)]">
+              <CardContent className="relative p-6 md:p-8">
+                <div className="absolute -right-12 -top-16 h-48 w-48 rounded-full bg-emerald-400/15 blur-3xl" />
+                <div className="relative flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+                  <div className="max-w-2xl">
+                    <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300"><HeartHandshake className="h-4 w-4" />一起把它变得更好</div>
+                    <h2 className="mt-3 text-2xl font-semibold tracking-tight md:text-3xl">备考路上，欢迎随时来找我交流</h2>
+                    <p className="mt-3 text-sm leading-7 text-slate-300">无论是 GRE 备考交流、使用反馈，还是你希望加入的新功能和改进意见，我都很愿意听。Always welcome everything ～</p>
+                  </div>
+                  <div className="shrink-0 rounded-[24px] border border-white/10 bg-white/8 p-4 backdrop-blur">
+                    <div className="text-xs text-slate-400">微信</div>
+                    <div className="mt-1 text-xl font-semibold tracking-wide">w45225350</div>
+                    <Button
+                      className={`mt-3 w-full rounded-xl ${contactCopied ? "bg-emerald-500 text-white hover:bg-emerald-500" : "bg-white text-slate-950 hover:bg-emerald-50"}`}
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText("w45225350");
+                          setContactCopied(true);
+                          window.setTimeout(() => setContactCopied(false), 1800);
+                          track("contact_wechat_copy", { source: "home_contact_card" });
+                        } catch (error) {
+                          setContactCopied(false);
+                        }
+                      }}
+                    >
+                      {contactCopied ? <><CheckCircle2 className="mr-2 h-4 w-4" />已复制微信号</> : <><Copy className="mr-2 h-4 w-4" />复制微信号</>}
+                    </Button>
                   </div>
                 </div>
               </CardContent>

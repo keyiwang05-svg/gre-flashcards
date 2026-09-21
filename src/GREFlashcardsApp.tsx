@@ -16,9 +16,14 @@ import {
   RotateCcw,
   Search,
   Shuffle,
+  Sparkles,
   Target,
   Trash2,
   Upload,
+  Volume2,
+  VolumeX,
+  Maximize2,
+  Minimize2,
   XCircle,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,6 +44,7 @@ const FLASHCARD_UI_STATE_KEY = "gre_flashcards_flashcard_ui_v1";
 const DEFAULT_SESSION_STATS = {
   reviewed: 0,
   known: 0,
+  fuzzy: 0,
   unknown: 0,
   quizCorrect: 0,
   quizWrong: 0,
@@ -308,6 +314,7 @@ function normalizeWord(raw = {}) {
     stats: {
       seen: raw.stats?.seen || 0,
       known: raw.stats?.known || 0,
+      fuzzy: raw.stats?.fuzzy || 0,
       unknown: raw.stats?.unknown || 0,
       quizCorrect: raw.stats?.quizCorrect || 0,
       quizWrong: raw.stats?.quizWrong || 0,
@@ -318,6 +325,7 @@ function normalizeWord(raw = {}) {
       wrongStreak: raw.reviewState?.wrongStreak || (defaultPending ? 1 : 0),
       priority: raw.reviewState?.priority || (defaultPending ? 2 : 0),
       lastWrongAt: raw.reviewState?.lastWrongAt || null,
+      lastUncertainAt: raw.reviewState?.lastUncertainAt || null,
       lastReviewedAt: raw.reviewState?.lastReviewedAt || null,
     },
     srs: raw.srs || { interval: 1, due: Date.now(), streak: 0 },
@@ -876,6 +884,12 @@ export default function GREFlashcardsApp() {
   const [favoriteSummarySearch, setFavoriteSummarySearch] = useState("");
   const [studyLogTab, setStudyLogTab] = useState("words");
   const [studyLogSearch, setStudyLogSearch] = useState("");
+  const [autoPronounce, setAutoPronounce] = useState(true);
+  const [learnedReviewCount, setLearnedReviewCount] = useState(20);
+  const [immersiveMode, setImmersiveMode] = useState(false);
+  const [companionEnabled, setCompanionEnabled] = useState(true);
+  const [companionMood, setCompanionMood] = useState("ready");
+  const [companionMessage, setCompanionMessage] = useState("我会安静地陪你刷完这一组。");
   const fileRef = useRef(null);
   const persistTimeoutRef = useRef(null);
   const flashcardSessionRef = useRef<{
@@ -888,6 +902,7 @@ export default function GREFlashcardsApp() {
   wordsSeen: number;
   knownCount: number;
   unknownCount: number;
+  fuzzyCount: number;
   uniqueWordIds: Set<string>;
   flushed: boolean;
 } | null>(null);
@@ -1006,6 +1021,9 @@ const sectionEntrySourceRef = useRef("initial_load");
         setDailyStudyLogs(parsed.dailyStudyLogs || {});
         setTaskGoals(parsed.taskGoals || DEFAULT_TASK_GOALS);
         setDailyPlan({ ...DEFAULT_DAILY_PLAN, ...(parsed.dailyPlan || {}) });
+        setAutoPronounce(parsed.preferences?.autoPronounce ?? true);
+        setCompanionEnabled(parsed.preferences?.companionEnabled ?? true);
+        setLearnedReviewCount(parsed.preferences?.learnedReviewCount || 20);
         try {
   const savedFlashcardState =
     typeof window !== "undefined"
@@ -1082,7 +1100,16 @@ const sectionEntrySourceRef = useRef("initial_load");
     if (persistTimeoutRef.current) clearTimeout(persistTimeoutRef.current);
 
     persistTimeoutRef.current = setTimeout(() => {
-      const payload = { words, sixChoicePairs, sessionStats, dailyStats, dailyStudyLogs, taskGoals, dailyPlan };
+      const payload = {
+        words,
+        sixChoicePairs,
+        sessionStats,
+        dailyStats,
+        dailyStudyLogs,
+        taskGoals,
+        dailyPlan,
+        preferences: { autoPronounce, companionEnabled, learnedReviewCount },
+      };
 
       Promise.resolve()
         .then(() => idbSetAppState(payload))
@@ -1114,9 +1141,10 @@ const sectionEntrySourceRef = useRef("initial_load");
     return () => {
       if (persistTimeoutRef.current) clearTimeout(persistTimeoutRef.current);
     };
-  }, [words, sixChoicePairs, sessionStats, dailyStats, dailyStudyLogs, taskGoals, dailyPlan, storageReady]);
+  }, [words, sixChoicePairs, sessionStats, dailyStats, dailyStudyLogs, taskGoals, dailyPlan, autoPronounce, companionEnabled, learnedReviewCount, storageReady]);
 
   const wrongWordBook = useMemo(() => words.filter((w) => (w.stats?.unknown || 0) > 0 || (w.stats?.quizWrong || 0) > 0), [words]);
+  const reviewCandidateWords = useMemo(() => words.filter((w) => Boolean(w.reviewState?.pending)), [words]);
 
   const todayReviewTargetActual = useMemo(() => {
   const now = Date.now();
@@ -1124,22 +1152,22 @@ const sectionEntrySourceRef = useRef("initial_load");
   const todayKeyForReview = formatDate(now);
   const todayReviewedCount = dailyStats[todayKeyForReview]?.reviewReviewed || 0;
 
-  const eligibleReviewWords = wrongWordBook.filter((w) => {
-    const lastWrongAt = w.reviewState?.lastWrongAt || 0;
+  const eligibleReviewWords = reviewCandidateWords.filter((w) => {
+    const lastProblemAt = w.reviewState?.lastWrongAt || w.reviewState?.lastUncertainAt || 0;
     const lastReviewedAt = w.reviewState?.lastReviewedAt || 0;
     const hasWrongHistory =
       (w.stats?.unknown || 0) > 0 ||
       (w.stats?.quizWrong || 0) > 0 ||
       Boolean(w.reviewState?.pending);
 
-    return hasWrongHistory && lastWrongAt > 0 && lastWrongAt < todayStart && lastReviewedAt < todayStart;
+    return hasWrongHistory && lastProblemAt > 0 && lastProblemAt < todayStart && lastReviewedAt < todayStart;
   });
 
   const reviewAvailableAtDayStart = eligibleReviewWords.length + todayReviewedCount;
   const plannedReviewCount = Math.max(0, dailyPlan.wordReviewCount || 0);
 
   return Math.min(plannedReviewCount, reviewAvailableAtDayStart);
-}, [wrongWordBook, dailyPlan.wordReviewCount, dailyStats]);
+}, [reviewCandidateWords, dailyPlan.wordReviewCount, dailyStats]);
 
 
   const stubbornWordBook = useMemo(() => words.filter((w) => (w.reviewState?.priority || 0) >= 4 || (w.reviewState?.wrongStreak || 0) >= 2), [words]);
@@ -1288,14 +1316,14 @@ const todayTaskNewRemaining = Math.max(
 
 const plannedReviewCount = Math.max(0, dailyPlan.wordReviewCount || 0);
 
-    const eligibleReviewWords = wrongWordBook.filter((w) => {
-      const lastWrongAt = w.reviewState?.lastWrongAt || 0;
+    const eligibleReviewWords = reviewCandidateWords.filter((w) => {
+      const lastProblemAt = w.reviewState?.lastWrongAt || w.reviewState?.lastUncertainAt || 0;
       const hasWrongHistory =
         (w.stats?.unknown || 0) > 0 ||
         (w.stats?.quizWrong || 0) > 0 ||
         Boolean(w.reviewState?.pending);
 
-      return hasWrongHistory && lastWrongAt > 0 && lastWrongAt < todayStart && !wasReviewedToday(w) && !wasWrongToday(w);
+      return hasWrongHistory && lastProblemAt > 0 && lastProblemAt < todayStart && !wasReviewedToday(w) && !wasWrongToday(w);
     });
 
     const todayTaskReviewTarget = Math.min(
@@ -1356,6 +1384,20 @@ const todayTaskReviewRemaining = Math.max(
       keepCurrentOrder = true;
     }
 
+    if (flashcardFilter === "learned_random") {
+      const learnedWords = words.filter(
+        (w) =>
+          (w.stats?.seen || 0) > 0 ||
+          (w.stats?.quizCorrect || 0) > 0 ||
+          (w.stats?.quizWrong || 0) > 0
+      );
+      base = seededShuffleArray(
+        learnedWords,
+        `${todayKeyForShuffle}-${shuffleSeed}-learned-${learnedReviewCount}`
+      ).slice(0, Math.min(learnedReviewCount, learnedWords.length));
+      keepCurrentOrder = true;
+    }
+
     const q = search.trim().toLowerCase();
     if (q) {
       base = base.filter((w) => [
@@ -1379,6 +1421,7 @@ const todayTaskReviewRemaining = Math.max(
  }, [
   words,
   wrongWordBook,
+  reviewCandidateWords,
   stubbornWordBook,
   mode,
   flashcardFilter,
@@ -1388,6 +1431,7 @@ const todayTaskReviewRemaining = Math.max(
   shuffleSeed,
   orderMode,
   dailyStats,
+  learnedReviewCount,
 ]);
 
   const filteredPairs = useMemo(() => {
@@ -1573,6 +1617,8 @@ const todayTaskReviewRemaining = Math.max(
           reviewReviewed: (current.reviewReviewed || 0) + (delta.reviewReviewed || 0),
           known: (current.known || 0) + (delta.known || 0),
           unknown: (current.unknown || 0) + (delta.unknown || 0),
+          fuzzy: (current.fuzzy || 0) + (delta.fuzzy || 0),
+          freeReviewed: (current.freeReviewed || 0) + (delta.freeReviewed || 0),
           quizCorrect: (current.quizCorrect || 0) + (delta.quizCorrect || 0),
           quizWrong: (current.quizWrong || 0) + (delta.quizWrong || 0),
           bbPairCorrect: (current.bbPairCorrect || 0) + (delta.bbPairCorrect || 0),
@@ -1674,6 +1720,7 @@ function flushFlashcardSession(endReason = "manual") {
     unique_words_seen: session.uniqueWordIds.size,
     known_count: session.knownCount,
     unknown_count: session.unknownCount,
+    fuzzy_count: session.fuzzyCount,
     duration_sec: Math.round((Date.now() - session.startedAt) / 1000),
     end_reason: endReason,
   });
@@ -1699,6 +1746,7 @@ function startFlashcardAnalyticsSession(args: {
     wordsSeen: 0,
     knownCount: 0,
     unknownCount: 0,
+    fuzzyCount: 0,
     uniqueWordIds: new Set(),
     flushed: false,
   };
@@ -1713,7 +1761,7 @@ function startFlashcardAnalyticsSession(args: {
 
 function recordFlashcardResult(
   word: { id?: string; word?: string } | null | undefined,
-  result: "known" | "unknown"
+  result: "known" | "fuzzy" | "unknown"
 ) {
   const session = flashcardSessionRef.current;
   if (!session) return;
@@ -1728,6 +1776,8 @@ function recordFlashcardResult(
 
   if (result === "known") {
     session.knownCount += 1;
+  } else if (result === "fuzzy") {
+    session.fuzzyCount += 1;
   } else {
     session.unknownCount += 1;
   }
@@ -1742,20 +1792,60 @@ function recordFlashcardResult(
     setSessionOrderIds([]);
     setFlashcardCompleteMessage("");
 
+    const nextFilter = options.filter || "all";
+    const learnedPoolSize = words.filter(
+      (w) => (w.stats?.seen || 0) > 0 || (w.stats?.quizCorrect || 0) > 0 || (w.stats?.quizWrong || 0) > 0
+    ).length;
+    const nextSessionSize = nextFilter === "learned_random"
+      ? Math.min(learnedReviewCount, learnedPoolSize)
+      : filteredWords.length;
+
     startFlashcardAnalyticsSession({
       mode: nextMode,
-      filter: options.filter || "all",
+      filter: nextFilter,
       flashcardMode: options.flashcardMode || "recognition",
-      sessionSize: filteredWords.length,
+      sessionSize: nextSessionSize,
     });
     setStudyView("flashcards");
     setMode(nextMode);
-    setFlashcardFilter(options.filter || "all");
+    setFlashcardFilter(nextFilter);
     setFlashcardMode(options.flashcardMode || "recognition");
     setCurrentIndex(0);
     setFlipped(false);
     setRevealLevel(0);
     setRetrievalInput("");
+  }
+
+  function speakWord(word = currentWord, source = "manual") {
+    if (!word?.word || typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(word.word);
+    utterance.lang = "en-US";
+    utterance.rate = 0.88;
+    const voices = window.speechSynthesis.getVoices();
+    utterance.voice = voices.find((voice) => voice.lang === "en-US") || voices.find((voice) => voice.lang.startsWith("en")) || null;
+    window.speechSynthesis.speak(utterance);
+    track("word_pronunciation_play", { source, auto_pronounce: autoPronounce });
+  }
+
+  async function enterImmersiveMode() {
+    setImmersiveMode(true);
+    track("immersive_mode_toggle", { enabled: true });
+    try {
+      if (!document.fullscreenElement) await document.documentElement.requestFullscreen?.();
+    } catch (fullscreenError) {
+      console.warn("Browser fullscreen unavailable; keeping in-page immersive mode", fullscreenError);
+    }
+  }
+
+  async function exitImmersiveMode() {
+    setImmersiveMode(false);
+    track("immersive_mode_toggle", { enabled: false });
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen?.();
+    } catch (fullscreenError) {
+      console.warn("Failed to exit browser fullscreen", fullscreenError);
+    }
   }
 
   function goPrev() {
@@ -1771,6 +1861,7 @@ function recordFlashcardResult(
     if (flashcardFilter === "task") return "太棒啦，今日总任务全部完成咯！";
     if (flashcardFilter === "review") return "太棒啦，今日复习结束哦！";
     if (flashcardFilter === "today_new" || flashcardFilter === "new") return "太棒啦，今日新词任务完成咯！";
+    if (flashcardFilter === "learned_random") return "随机复习完成，旧记忆又加固了一层！";
     return "太棒啦，这组闪卡完成咯！";
   }
 
@@ -1792,9 +1883,10 @@ function recordFlashcardResult(
     setRetrievalInput("");
   }
 
-  function updateWordResult(type) {
+  function updateWordResult(type: "known" | "fuzzy" | "unknown") {
   if (!currentWord) return;
 
+  const nextSessionSeen = (flashcardSessionRef.current?.wordsSeen || 0) + 1;
   recordFlashcardResult(currentWord, type);
 
     const now = Date.now();
@@ -1803,20 +1895,24 @@ function recordFlashcardResult(
       (currentWord.reviewState?.pending ||
         (currentWord.stats?.unknown || 0) > 0 ||
         (currentWord.stats?.quizWrong || 0) > 0) &&
-      (currentWord.reviewState?.lastWrongAt || 0) > 0 &&
-      (currentWord.reviewState?.lastWrongAt || 0) < todayStart
+      (currentWord.reviewState?.lastWrongAt || currentWord.reviewState?.lastUncertainAt || 0) > 0 &&
+      (currentWord.reviewState?.lastWrongAt || currentWord.reviewState?.lastUncertainAt || 0) < todayStart
     );
 
     setWords((prev) => prev.map((w) => {
       if (w.id !== currentWord.id) return w;
       const seen = w.stats.seen + 1;
       const known = w.stats.known + (type === "known" ? 1 : 0);
+      const fuzzy = (w.stats.fuzzy || 0) + (type === "fuzzy" ? 1 : 0);
       const unknown = w.stats.unknown + (type === "unknown" ? 1 : 0);
       let nextInterval = w.srs.interval || 1;
       let streak = w.srs.streak || 0;
       if (type === "known") {
         streak += 1;
         nextInterval = Math.min(Math.round(nextInterval * 1.8 + 1), 30);
+      } else if (type === "fuzzy") {
+        streak = 0;
+        nextInterval = Math.max(1, Math.min(2, Math.round(nextInterval / 2)));
       } else {
         streak = 0;
         nextInterval = 1;
@@ -1833,6 +1929,15 @@ function recordFlashcardResult(
           priority: Math.min((prevReview.priority || 0) + 2, 8),
           lastWrongAt: now,
         };
+      } else if (type === "fuzzy") {
+        nextReview = {
+          ...nextReview,
+          pending: true,
+          correctStreak: 0,
+          wrongStreak: 0,
+          priority: Math.min(Math.max(prevReview.priority || 0, 1) + 1, 8),
+          lastUncertainAt: now,
+        };
       } else if (prevReview.pending) {
         const correctStreak = (prevReview.correctStreak || 0) + 1;
         nextReview = {
@@ -1848,22 +1953,52 @@ function recordFlashcardResult(
 
       return {
         ...w,
-        stats: { ...w.stats, seen, known, unknown },
+        stats: { ...w.stats, seen, known, fuzzy, unknown },
         reviewState: nextReview,
         srs: { interval: nextInterval, streak, due: now + nextInterval * 24 * 60 * 60 * 1000 },
       };
     }));
 
+    const wasUnseen = (currentWord.stats?.seen || 0) === 0 &&
+      (currentWord.stats?.quizCorrect || 0) === 0 &&
+      (currentWord.stats?.quizWrong || 0) === 0;
+    const isFreeReview = flashcardFilter === "learned_random" || ["favorite_words", "favorite_senses"].includes(mode);
+    const countsAsNew = wasUnseen && !isFreeReview;
+    const countsAsReview = !countsAsNew && isReviewCard && !isFreeReview;
     const delta = {
       reviewed: 1,
-      newReviewed: isReviewCard ? 0 : 1,
-      reviewReviewed: isReviewCard ? 1 : 0,
+      newReviewed: countsAsNew ? 1 : 0,
+      reviewReviewed: countsAsReview ? 1 : 0,
+      freeReviewed: !countsAsNew && !countsAsReview ? 1 : 0,
       known: type === "known" ? 1 : 0,
+      fuzzy: type === "fuzzy" ? 1 : 0,
       unknown: type === "unknown" ? 1 : 0,
     };
-    setSessionStats((prev) => ({ ...prev, reviewed: prev.reviewed + 1, known: prev.known + delta.known, unknown: prev.unknown + delta.unknown }));
+    setSessionStats((prev) => ({
+      ...prev,
+      reviewed: prev.reviewed + 1,
+      known: prev.known + delta.known,
+      fuzzy: (prev.fuzzy || 0) + delta.fuzzy,
+      unknown: prev.unknown + delta.unknown,
+    }));
     recordDailyProgress(delta);
     recordWordStudyLog(currentWord, type);
+
+    if (companionEnabled) {
+      if (nextSessionSeen % 5 === 0) {
+        setCompanionMood("celebrate");
+        setCompanionMessage(`这一组已经认真刷了 ${nextSessionSeen} 张，休息一下眼睛也可以。`);
+      } else if (type === "known") {
+        setCompanionMood("happy");
+        setCompanionMessage("记得很稳，继续保持这个节奏。");
+      } else if (type === "fuzzy") {
+        setCompanionMood("thinking");
+        setCompanionMessage("模糊很正常，我会把它放回复习队列。");
+      } else {
+        setCompanionMood("support");
+        setCompanionMessage("没关系，标出来就是一次有效学习。");
+      }
+    }
 
     if (currentIndex + 1 >= sessionOrder.length) {
       setFlashcardCompleteMessage(getFlashcardCompleteMessage());
@@ -1876,6 +2011,52 @@ function recordFlashcardResult(
 
     goNext();
   }
+
+  useEffect(() => {
+    if (!autoPronounce || activeSection !== "flashcards" || studyView !== "flashcards" || !currentWord) return;
+    const timer = window.setTimeout(() => speakWord(currentWord, "auto"), 180);
+    return () => window.clearTimeout(timer);
+  }, [currentWord?.id, autoPronounce, activeSection, studyView]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      if (!document.fullscreenElement && immersiveMode) setImmersiveMode(false);
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, [immersiveMode]);
+
+  useEffect(() => {
+    if (!immersiveMode || activeSection !== "flashcards" || studyView !== "flashcards") return;
+
+    const handleImmersiveKey = (event) => {
+      const target = event.target;
+      const isTyping = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable;
+      if (isTyping || event.repeat) return;
+
+      if ([" ", "ArrowLeft", "ArrowRight", "ArrowDown", "ArrowUp", "Escape", "f", "F"].includes(event.key)) {
+        event.preventDefault();
+      }
+
+      if (event.key === "ArrowRight") updateWordResult("known");
+      if (event.key === "ArrowLeft") updateWordResult("unknown");
+      if (event.key === "ArrowDown") updateWordResult("fuzzy");
+      if (event.key === "ArrowUp") speakWord(currentWord, "keyboard");
+      if (event.key === "Escape") exitImmersiveMode();
+      if (event.key === "f" || event.key === "F") {
+        if (document.fullscreenElement) document.exitFullscreen?.();
+        else document.documentElement.requestFullscreen?.();
+      }
+      if (event.key === " ") {
+        if (!flipped) setFlipped(true);
+        else if (revealLevel < 3) setRevealLevel((value) => Math.min(value + 1, 3));
+        else goNext();
+      }
+    };
+
+    window.addEventListener("keydown", handleImmersiveKey);
+    return () => window.removeEventListener("keydown", handleImmersiveKey);
+  }, [immersiveMode, activeSection, studyView, currentWord?.id, flipped, revealLevel, sessionOrder.length, currentIndex]);
 
   function toggleFavoriteWord(wordId) {
     setWords((prev) => prev.map((w) => (w.id === wordId ? { ...w, favorite: !w.favorite } : w)));
@@ -2283,7 +2464,7 @@ function openHomeSection(source = "unknown") {
   function resetProgress() {
     setWords((prev) => prev.map((w) => ({
       ...w,
-      stats: { seen: 0, known: 0, unknown: 0, quizCorrect: 0, quizWrong: 0 },
+      stats: { seen: 0, known: 0, fuzzy: 0, unknown: 0, quizCorrect: 0, quizWrong: 0 },
       reviewState: { pending: false, correctStreak: 0, wrongStreak: 0, priority: 0, lastWrongAt: null, lastReviewedAt: null },
       srs: { interval: 1, due: Date.now(), streak: 0 },
     })));
@@ -2354,7 +2535,7 @@ function openHomeSection(source = "unknown") {
   newWordCount + todayNewWordStudyCount
 );
   const todayReviewWordStudyCount = todayStat.reviewReviewed || 0;
-  const todayWordStudyCount = todayStat.reviewed || 0;
+  const todayWordStudyCount = (todayStat.newReviewed || 0) + (todayStat.reviewReviewed || 0);
   const todayPairPracticeCount = (todayStat.bbPairCorrect || 0) + (todayStat.bbPairWrong || 0);
   const todayQuizCount = (todayStat.quizCorrect || 0) + (todayStat.quizWrong || 0);
   const todayQuizAccuracy = todayQuizCount ? Math.round(((todayStat.quizCorrect || 0) / todayQuizCount) * 100) : null;
@@ -2429,22 +2610,22 @@ function openHomeSection(source = "unknown") {
   const isRecordsSection = activeSection === "records";
   
   return (
-    <div className="app-shell min-h-screen p-4 md:p-8">
-      <div className="mx-auto max-w-7xl space-y-6">
+    <div className={`app-shell min-h-screen ${immersiveMode ? "bg-slate-950 p-3 md:p-5" : "p-4 md:p-8"}`}>
+      <div className={`mx-auto space-y-6 ${immersiveMode ? "max-w-6xl" : "max-w-7xl"}`}>
         {storageMessage ? (
           <Card className="rounded-2xl border-amber-300 bg-amber-50 shadow-sm">
             <CardContent className="p-5 text-sm text-amber-900 whitespace-pre-line">{storageMessage}</CardContent>
           </Card>
         ) : null}
 
-        <div className="flex flex-wrap items-center gap-2 rounded-[28px] border border-white/70 bg-white/80 p-2 shadow-[0_20px_50px_-40px_rgba(15,23,42,0.35)] backdrop-blur">
+        {!immersiveMode ? <div className="flex flex-wrap items-center gap-2 rounded-[28px] border border-white/70 bg-white/80 p-2 shadow-[0_20px_50px_-40px_rgba(15,23,42,0.35)] backdrop-blur">
           <Button variant={isHomeSection ? "default" : "ghost"} className={`rounded-2xl px-4 ${isHomeSection ? "bg-cyan-700 hover:bg-cyan-800" : ""}`} onClick={() => openHomeSection("top_nav")}>首页</Button>
           <Button variant={isFlashcardsSection ? "default" : "ghost"} className={`rounded-2xl px-4 ${isFlashcardsSection ? "bg-cyan-700 hover:bg-cyan-800" : ""}`} onClick={() => openFlashcardsSection("task", flashcardMode, "all", "top_nav")}>闪卡</Button>
           <Button variant={isPairsSection ? "default" : "ghost"} className={`rounded-2xl px-4 ${isPairsSection ? "bg-cyan-700 hover:bg-cyan-800" : ""}`} onClick={() => openPairsSection(pairReviewMode, "top_nav")}>六选二</Button>
           <Button variant={isRecordsSection ? "default" : "ghost"} className={`rounded-2xl px-4 ${isRecordsSection ? "bg-cyan-700 hover:bg-cyan-800" : ""}`} onClick={() => openRecordsSection("top_nav")}>记录</Button>
-        </div>
+        </div> : null}
 
-        <section className={isHomeSection ? "space-y-6" : isRecordsSection ? "space-y-6" : "grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)]"}>
+        <section className={immersiveMode ? "space-y-4" : isHomeSection ? "space-y-6" : isRecordsSection ? "space-y-6" : "grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)]"}>
           {isHomeSection ? <Card className="overflow-hidden rounded-[32px] border-0 bg-gradient-to-br from-sky-950 via-cyan-900 to-indigo-950 text-white shadow-[0_30px_80px_-45px_rgba(15,23,42,0.85)]">
             <CardContent className="p-6 md:p-8">
               <div className="grid gap-6 lg:grid-cols-[minmax(0,1.05fr)_280px]">
@@ -2529,7 +2710,7 @@ function openHomeSection(source = "unknown") {
             </CardContent>
           </Card> : null}
 
-          {!isHomeSection && !isRecordsSection ? <Card className="rounded-[28px] border border-slate-200/70 bg-white/90 shadow-[0_24px_60px_-42px_rgba(15,23,42,0.28)]">
+          {!immersiveMode && !isHomeSection && !isRecordsSection ? <Card className="rounded-[28px] border border-slate-200/70 bg-white/90 shadow-[0_24px_60px_-42px_rgba(15,23,42,0.28)]">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-lg"><BookOpen className="h-5 w-5" /> {isFlashcardsSection ? "闪卡面板" : "六选二面板"}</CardTitle>
             </CardHeader>
@@ -2557,6 +2738,43 @@ function openHomeSection(source = "unknown") {
                       <Button variant={flashcardFilter === "review" ? "default" : "outline"} size="sm" className="rounded-full" onClick={() => openFlashcardDeck("all", { filter: "review", flashcardMode: "recognition" })}>只看今日复习</Button>
                       <Button variant={flashcardFilter === "today_new" ? "default" : "outline"} size="sm" className="rounded-full" onClick={() => openFlashcardDeck("all", { filter: "today_new", flashcardMode })}>只看今日新词</Button>
                       <Button variant={flashcardFilter === "new" ? "default" : "outline"} size="sm" className="rounded-full" onClick={() => openFlashcardDeck("all", { filter: "new", flashcardMode })}>继续学习新词</Button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-cyan-100 bg-cyan-50/60 p-3">
+                    <div className="text-sm font-medium text-cyan-950">随机复习已学单词</div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {[10, 20, 30, 50].map((count) => (
+                        <Button key={count} variant={learnedReviewCount === count ? "default" : "outline"} size="sm" className="rounded-full" onClick={() => setLearnedReviewCount(count)}>{count} 个</Button>
+                      ))}
+                    </div>
+                    <div className="mt-2 flex items-center gap-2">
+                      <Input
+                        type="number"
+                        min="1"
+                        max="500"
+                        value={learnedReviewCount}
+                        onChange={(event) => setLearnedReviewCount(Math.min(500, Math.max(1, Number(event.target.value) || 1)))}
+                        className="h-9 rounded-xl bg-white"
+                        aria-label="自定义随机复习数量"
+                      />
+                      <span className="whitespace-nowrap text-xs text-cyan-800">自定义数量</span>
+                    </div>
+                    <Button className="mt-3 w-full rounded-xl bg-cyan-700 hover:bg-cyan-800" size="sm" disabled={!words.some((w) => (w.stats?.seen || 0) > 0 || (w.stats?.quizCorrect || 0) > 0 || (w.stats?.quizWrong || 0) > 0)} onClick={() => openFlashcardDeck("all", { filter: "learned_random", flashcardMode })}>
+                      <Shuffle className="mr-2 h-4 w-4" />开始随机复习
+                    </Button>
+                  </div>
+
+                  <div>
+                    <div className="text-sm font-medium">学习体验</div>
+                    <div className="mt-2 grid gap-2">
+                      <Button variant="outline" size="sm" className="justify-start rounded-xl" onClick={() => setAutoPronounce((value) => !value)}>
+                        {autoPronounce ? <Volume2 className="mr-2 h-4 w-4" /> : <VolumeX className="mr-2 h-4 w-4" />}
+                        自动发音：{autoPronounce ? "开" : "关"}
+                      </Button>
+                      <Button variant="outline" size="sm" className="justify-start rounded-xl" onClick={() => setCompanionEnabled((value) => !value)}>
+                        <Sparkles className="mr-2 h-4 w-4" />陪背伙伴：{companionEnabled ? "开" : "关"}
+                      </Button>
                     </div>
                   </div>
 
@@ -2681,6 +2899,13 @@ function openHomeSection(source = "unknown") {
                           <Button variant="outline" size="sm" className="rounded-full" onClick={() => openFlashcardDeck("all", { filter: "all" })}>返回全部闪卡</Button>
                         ) : null}
                         <span className="font-medium text-slate-700">{progressLabel}</span>
+                        <Button variant="outline" size="sm" className="rounded-full" onClick={() => speakWord(currentWord, "button")} disabled={!currentWord} aria-label="播放当前单词发音">
+                          <Volume2 className="h-4 w-4" />
+                        </Button>
+                        <Button variant="outline" size="sm" className="rounded-full" onClick={immersiveMode ? exitImmersiveMode : enterImmersiveMode}>
+                          {immersiveMode ? <Minimize2 className="mr-2 h-4 w-4" /> : <Maximize2 className="mr-2 h-4 w-4" />}
+                          {immersiveMode ? "退出沉浸" : "沉浸模式"}
+                        </Button>
                       </div>
                     </div>
                     <Progress value={progress} className="h-2 bg-slate-100" />
@@ -2705,6 +2930,21 @@ function openHomeSection(source = "unknown") {
                     <motion.div key={`${currentWord.id}-${flipped}-${revealLevel}-${currentIndex}`} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.2 }}>
                       <Card className="min-h-[620px] cursor-pointer overflow-hidden rounded-[34px] border border-slate-200/80 bg-white/94 shadow-[0_36px_80px_-54px_rgba(15,23,42,0.55)]" onClick={() => { if (!flipped) setFlipped(true); else setRevealLevel((v) => Math.min(v + 1, 3)); }}>
                         <CardContent className="flex min-h-[560px] flex-col justify-between p-6 md:p-8">
+                          <div className="mb-4 flex flex-wrap items-center justify-between gap-3" onClick={(event) => event.stopPropagation()}>
+                            {companionEnabled ? (
+                              <div className="flex max-w-xl items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+                                <span className="text-2xl" role="img" aria-label="陪背伙伴">
+                                  {companionMood === "celebrate" ? "🎉" : companionMood === "happy" ? "🐣" : companionMood === "thinking" ? "🦉" : companionMood === "support" ? "🐻" : "🌱"}
+                                </span>
+                                <span>{companionMessage}</span>
+                              </div>
+                            ) : <span />}
+                            {immersiveMode ? (
+                              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-6 text-slate-600">
+                                空格 展开 / 下一张 · ← 不认识 · ↓ 模糊 · → 认识 · ↑ 发音 · Esc 退出
+                              </div>
+                            ) : null}
+                          </div>
                           {!flipped ? (
                             <div className="flex h-full min-h-[460px] flex-col items-center justify-center text-center">
                               {flashcardMode === "recognition" ? (
@@ -2779,7 +3019,7 @@ function openHomeSection(source = "unknown") {
                             </div>
                             <div className="grid gap-2 sm:grid-cols-3">
                               <Button variant="outline" className="rounded-2xl border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100" onClick={(e) => { e.stopPropagation(); updateWordResult("known"); }}><CheckCircle2 className="mr-2 h-4 w-4" /> 认识</Button>
-                              <Button variant="outline" className="rounded-2xl border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100" onClick={(e) => { e.stopPropagation(); goNext(); }}>模糊，先跳过</Button>
+                              <Button variant="outline" className="rounded-2xl border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100" onClick={(e) => { e.stopPropagation(); updateWordResult("fuzzy"); }}>模糊</Button>
                               <Button variant="outline" className="rounded-2xl border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100" onClick={(e) => { e.stopPropagation(); updateWordResult("unknown"); }}><XCircle className="mr-2 h-4 w-4" /> 不认识</Button>
                             </div>
                           </div>
@@ -3124,7 +3364,12 @@ function openHomeSection(source = "unknown") {
                                       {item.en ? <div className="mt-1 text-xs text-slate-500">{item.en}</div> : null}
                                     </div>
                                     <div className="flex flex-wrap items-center gap-2">
-                                      <Badge variant="outline" className={item.result === "known" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-rose-200 bg-rose-50 text-rose-700"}>{item.result === "known" ? "认识" : "不认识"}</Badge>
+                                      <Badge
+                                        variant="outline"
+                                        className={item.result === "known" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : item.result === "fuzzy" ? "border-amber-200 bg-amber-50 text-amber-700" : "border-rose-200 bg-rose-50 text-rose-700"}
+                                      >
+                                        {item.result === "known" ? "认识" : item.result === "fuzzy" ? "模糊" : "不认识"}
+                                      </Badge>
                                       <Badge variant="outline">{item.mode || "flashcard"}</Badge>
                                     </div>
                                   </div>

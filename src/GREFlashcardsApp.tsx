@@ -35,6 +35,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { track, trackPageView } from "@/lib/analytics";
+import { nextPairQuizQuestion, pairQuizPoolSignature } from "@/lib/pairQuiz.js";
 
 const STORAGE_KEY = "gre_flashcards_app_v11";
 const APP_DB_NAME = "gre-flashcards-db";
@@ -42,6 +43,7 @@ const APP_DB_VERSION = 1;
 const APP_STATE_STORE = "app_state";
 const APP_STATE_ID = "primary";
 const FLASHCARD_UI_STATE_KEY = "gre_flashcards_flashcard_ui_v1";
+const PAIR_QUIZ_STATE_KEY = "gre_flashcards_pair_quiz_v1";
 
 const DEFAULT_SESSION_STATS = {
   reviewed: 0,
@@ -846,36 +848,7 @@ function getWordMeaningFromPool(wordPool, wordText) {
   return matched.shortMeaning || firstSense.zh || firstSense.en || "";
 }
 
-function buildQuizQuestion(wordPool, mode, pairPool) {
-  if (mode === "bb_pairs") {
-    const target = pickRandom(pairPool.filter((pair) => pair.a && pair.b));
-    if (!target) return null;
-    const correctAnswer = Math.random() > 0.5 ? target.a : target.b;
-    const promptWord = correctAnswer === target.a ? target.b : target.a;
-    const distractorPool = uniq(pairPool.filter((p) => p.id !== target.id).flatMap((p) => [p.a, p.b]));
-    const pairAMeaning = target.aMeaning || getWordMeaningFromPool(wordPool, target.a) || "";
-    const pairBMeaning = target.bMeaning || getWordMeaningFromPool(wordPool, target.b) || "";
-    return {
-      questionType: "bb_pairs",
-      pairId: target.id,
-      pairA: target.a,
-      pairB: target.b,
-      pairZh: target.zh || "",
-      pairAMeaning,
-      pairBMeaning,
-      promptWord,
-      correctAnswer,
-      choices: shuffleArray([
-        correctAnswer,
-        ...shuffleArray(distractorPool).filter((item) => item.toLowerCase() !== correctAnswer.toLowerCase() && item.toLowerCase() !== promptWord.toLowerCase()).slice(0, 5),
-      ]).slice(0, 6),
-      promptZh: target.zh || "",
-      explanation: `${target.a} = ${target.b}`,
-      frequency: target.frequency || "",
-      source: target.source || "",
-    };
-  }
-
+function buildQuizQuestion(wordPool, mode) {
   const validWords = wordPool.filter((w) => w.senses.some((s) => (mode === "equivalence" ? (s.synonyms || []).length : (s.antonyms || []).length)));
   const target = pickRandom(validWords);
   if (!target) return null;
@@ -933,7 +906,16 @@ async function loadBuiltinLibraries() {
     pairs: rawPairs.map(normalizePair),
   };
 }
+function loadPairQuizState() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(PAIR_QUIZ_STATE_KEY) || "null");
+    if (saved?.version === 1 && saved.rounds && typeof saved.rounds === "object" && !Array.isArray(saved.rounds)) return saved;
+  } catch { /* A new round is safe when saved UI state is unavailable. */ }
+  return { rounds: {}, preferences: {} };
+}
+
 export default function GREFlashcardsApp() {
+  const [initialPairQuiz] = useState(loadPairQuizState);
   const [words, setWords] = useState([]);
   const [sixChoicePairs, setSixChoicePairs] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -948,8 +930,8 @@ export default function GREFlashcardsApp() {
   const [quizMode, setQuizMode] = useState("equivalence");
   const [quizHintMode, setQuizHintMode] = useState("study");
   const [search, setSearch] = useState("");
-  const [pairSearch, setPairSearch] = useState("");
-  const [pairReviewMode, setPairReviewMode] = useState("mix");
+  const [pairSearch, setPairSearch] = useState(typeof initialPairQuiz.preferences?.search === "string" ? initialPairQuiz.preferences.search.slice(0, 500) : "");
+  const [pairReviewMode, setPairReviewMode] = useState(["mix", "sss", "ss", "s", "wrong", "all"].includes(initialPairQuiz.preferences?.mode) ? initialPairQuiz.preferences.mode : "mix");
   const [sessionStats, setSessionStats] = useState(DEFAULT_SESSION_STATS);
   const [dailyStats, setDailyStats] = useState({});
   const [dailyStudyLogs, setDailyStudyLogs] = useState({});
@@ -962,6 +944,7 @@ export default function GREFlashcardsApp() {
   const [selectedChoice, setSelectedChoice] = useState("");
   const [quizChecked, setQuizChecked] = useState(false);
   const quizQuestionRef = useRef(null);
+  const pairQuizRoundsRef = useRef(initialPairQuiz.rounds);
   const selectedChoiceRef = useRef("");
   const quizCheckedRef = useRef(false);
   const [pairExplainCard, setPairExplainCard] = useState(null);
@@ -1548,6 +1531,7 @@ const todayTaskReviewRemaining = Math.max(
     return base.filter((p) => [p.a, p.b, p.zh, p.aMeaning, p.bMeaning, p.source, p.frequency].join(" | ").toLowerCase().includes(q));
   }, [sixChoicePairs, wrongPairBook, pairReviewMode, pairSearch]);
 
+  const pairQuestionPoolSignature = quizMode === "bb_pairs" ? pairQuizPoolSignature(filteredPairs) : "";
   const filteredWordMembershipSignature = useMemo(() => [...filteredWords.map((w) => w.id)].sort().join("|"), [filteredWords]);
   const [sessionOrderIds, setSessionOrderIds] = useState([]);
   useEffect(() => {
@@ -1595,20 +1579,9 @@ const todayTaskReviewRemaining = Math.max(
   }, [sessionOrderIds]);
 
   useEffect(() => {
-    if (studyView !== "quiz") return;
-
-    setPairExplainCard(null);
-
-    const q = buildQuizQuestion(
-      filteredWords.length ? filteredWords : words,
-      quizMode,
-      filteredPairs.length ? filteredPairs : sixChoicePairs
-    );
-
-    setQuizQuestion(q);
-    setSelectedChoice("");
-    setQuizChecked(false);
-  }, [studyView, quizMode, pairReviewMode, pairSearch, search]);
+    if (studyView !== "quiz" || !storageReady) return;
+    showQuizQuestion(true);
+  }, [studyView, quizMode, pairReviewMode, pairSearch, search, storageReady, pairQuestionPoolSignature]);
 
   useEffect(() => {
   const ids = filteredWords.map((w) => w.id);
@@ -2396,20 +2369,11 @@ function recordFlashcardResult(
   if (quizQuestion.questionType === "bb_pairs") {
     recordPairStudyLog(quizQuestion, isCorrect ? "correct" : "wrong", effectiveChoice);
 
-    if (quizHintMode === "study") {
-      setPairExplainCard({
-        pairId: quizQuestion.pairId,
-        a: quizQuestion.pairA || quizQuestion.promptWord,
-        b: quizQuestion.pairB || quizQuestion.correctAnswer,
-        aMeaning: quizQuestion.pairAMeaning || "",
-        bMeaning: quizQuestion.pairBMeaning || "",
-        zh: quizQuestion.pairZh || quizQuestion.promptZh || "",
-        selectedAnswer: effectiveChoice,
-        correctAnswer: quizQuestion.correctAnswer,
-        isCorrect,
-        frequency: quizQuestion.frequency || "",
-        source: quizQuestion.source || "",
-      });
+    if (quizHintMode === "study") setPairExplainCard(pairExplanation(quizQuestion, effectiveChoice));
+    const scope = pairQuizScope();
+    const round = getPairQuizRounds()[scope];
+    if (round?.question?.pairId === quizQuestion.pairId) {
+      savePairQuizRound(scope, { ...round, answer: { selectedChoice: effectiveChoice, checked: true } });
     }
 
     setSixChoicePairs((prev) => prev.map((pair) => {
@@ -2477,25 +2441,63 @@ function recordFlashcardResult(
   recordDailyProgress(delta);
 }
 
+function getPairQuizRounds() {
+  return pairQuizRoundsRef.current;
+}
+
+function pairQuizScope() {
+  return JSON.stringify([pairReviewMode, pairSearch.trim().toLowerCase()]);
+}
+
+function savePairQuizRound(scope, round) {
+  const rounds = getPairQuizRounds();
+  delete rounds[scope];
+  if (round) rounds[scope] = round;
+  // Keep recent search/filter rounds without growing local storage indefinitely.
+  for (const key of Object.keys(rounds).slice(0, -12)) delete rounds[key];
+  try {
+    window.localStorage.setItem(PAIR_QUIZ_STATE_KEY, JSON.stringify({ version: 1, rounds, preferences: { mode: pairReviewMode, search: pairSearch } }));
+  } catch {
+    // The in-memory queue still prevents repeated draws during this visit.
+  }
+}
+
+function pairExplanation(question, selectedAnswer) {
+  return {
+    pairId: question.pairId, a: question.pairA || question.promptWord, b: question.pairB || question.correctAnswer,
+    aMeaning: question.pairAMeaning || "", bMeaning: question.pairBMeaning || "",
+    zh: question.pairZh || question.promptZh || "", selectedAnswer, correctAnswer: question.correctAnswer,
+    isCorrect: selectedAnswer === question.correctAnswer, frequency: question.frequency || "", source: question.source || "",
+  };
+}
+
+function showQuizQuestion(resume = false) {
+  let question, answer = null;
+  if (quizMode === "bb_pairs") {
+    const scope = pairQuizScope();
+    const result = nextPairQuizQuestion(filteredPairs, sixChoicePairs, getPairQuizRounds()[scope], {
+      resume, getWordMeaning: (word) => getWordMeaningFromPool(words, word),
+    });
+    savePairQuizRound(scope, result.round);
+    question = result.question;
+    answer = result.round?.answer;
+  } else {
+    question = buildQuizQuestion(filteredWords.length ? filteredWords : words, quizMode);
+  }
+  const checked = Boolean(answer?.checked);
+  const selected = answer?.selectedChoice || "";
+  setQuizQuestion(question);
+  quizQuestionRef.current = question;
+  setSelectedChoice(selected);
+  selectedChoiceRef.current = selected;
+  setQuizChecked(checked);
+  quizCheckedRef.current = checked;
+  setPairExplainCard(checked && quizHintMode === "study" ? pairExplanation(question, selected) : null);
+}
+
 function nextQuizQuestion() {
-  setPairExplainCard(null);
-
-  track("next_quiz_question", {
-    quiz_mode: quizMode,
-  });
-
-  const q = buildQuizQuestion(
-    filteredWords.length ? filteredWords : words,
-    quizMode,
-    filteredPairs.length ? filteredPairs : sixChoicePairs
-  );
-
-  setQuizQuestion(q);
-  quizQuestionRef.current = q;
-  setSelectedChoice("");
-  selectedChoiceRef.current = "";
-  setQuizChecked(false);
-  quizCheckedRef.current = false;
+  track("next_quiz_question", { quiz_mode: quizMode });
+  showQuizQuestion(false);
 }
 
 function openFlashcardsSection(filter = "task", nextFlashcardMode = flashcardMode, nextMode = "all", source = "unknown") {
@@ -2666,6 +2668,8 @@ function openHomeSection(source = "unknown") {
   }
 
   function resetProgress() {
+    pairQuizRoundsRef.current = {};
+    try { window.localStorage.removeItem(PAIR_QUIZ_STATE_KEY); } catch { /* In-memory rounds are already cleared. */ }
     setWords((prev) => prev.map((w) => ({
       ...w,
       stats: { seen: 0, known: 0, fuzzy: 0, unknown: 0, quizCorrect: 0, quizWrong: 0 },
@@ -2688,10 +2692,11 @@ function openHomeSection(source = "unknown") {
   }
 
   function resetBbPairLibrary() {
+    pairQuizRoundsRef.current = {};
+    try { window.localStorage.removeItem(PAIR_QUIZ_STATE_KEY); } catch { /* In-memory rounds are already cleared. */ }
     setSixChoicePairs(sampleSixChoicePairs.map(normalizePair));
     setPairReviewMode("mix");
     setPairSearch("");
-    if (quizMode === "bb_pairs") nextQuizQuestion();
   }
 
   function shuffleSession() {
@@ -3368,7 +3373,7 @@ function openHomeSection(source = "unknown") {
                       <div className={`${isCompactPairLayout ? "text-base" : "mt-1 text-lg"} font-semibold`}>{quizMode === "equivalence" ? "等价词训练" : quizMode === "antonym" ? "反义关系训练" : "BB 六选二训练"}</div>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="outline" className="rounded-full border-slate-200 bg-white px-3 py-1">{quizMode === "bb_pairs" ? `${filteredPairs.length || sixChoicePairs.length} pairs in pool` : `${filteredWords.length || words.length} words in pool`}</Badge>
+                      <Badge variant="outline" className="rounded-full border-slate-200 bg-white px-3 py-1">{quizMode === "bb_pairs" ? `${filteredPairs.length} pairs in pool` : `${filteredWords.length || words.length} words in pool`}</Badge>
                       {quizMode === "bb_pairs" ? (
                         <Button variant="outline" size="sm" className="rounded-full" onClick={immersiveMode ? exitImmersiveMode : enterImmersiveMode}>
                           {immersiveMode ? <Minimize2 className="mr-2 h-4 w-4" /> : <Maximize2 className="mr-2 h-4 w-4" />}
@@ -3385,13 +3390,14 @@ function openHomeSection(source = "unknown") {
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div className="flex flex-wrap items-center gap-3">
                           <Badge className="rounded-full bg-cyan-100 text-cyan-900"><Target className="mr-2 h-4 w-4" /> {quizMode === "equivalence" ? "Text Completion / Equivalence" : quizMode === "antonym" ? "Opposite Logic" : "BB Six-Choice Pairing"}</Badge>
+                          {quizMode === "bb_pairs" ? <Badge variant="outline" className="rounded-full">第 {quizQuestion.roundNumber} 轮 · {quizQuestion.roundPosition} / {quizQuestion.roundTotal} 组</Badge> : null}
                           {quizHintMode === "study" && quizQuestion.frequency ? <Badge variant="outline" className="rounded-full border-slate-200 bg-white">{quizQuestion.frequency}</Badge> : null}
                         </div>
                         {quizMode === "bb_pairs" ? (
                           <div className="flex flex-wrap items-center justify-end gap-2">
                             {isCompactPairLayout && !immersiveMode ? (
                               <>
-                                <Badge variant="outline" className="rounded-full border-slate-200 bg-white px-3 py-1">{filteredPairs.length || sixChoicePairs.length} pairs in pool</Badge>
+                                <Badge variant="outline" className="rounded-full border-slate-200 bg-white px-3 py-1">{filteredPairs.length} pairs in pool</Badge>
                                 <Button variant="outline" size="sm" className="rounded-full" onClick={enterImmersiveMode}>
                                   <Maximize2 className="mr-2 h-4 w-4" />沉浸模式
                                 </Button>
@@ -3522,7 +3528,7 @@ function openHomeSection(source = "unknown") {
                     </CardContent>
                   </Card>
                 ) : (
-                  <Card className="rounded-[28px] shadow-sm"><CardContent className="flex min-h-[460px] flex-col items-center justify-center p-8 text-center"><div className="rounded-full bg-slate-100 p-4"><Trash2 className="h-8 w-8 text-slate-500" /></div><h3 className="mt-4 text-2xl font-semibold">Quiz pool is too small</h3></CardContent></Card>
+                  <Card className="rounded-[28px] shadow-sm"><CardContent className="flex min-h-[460px] flex-col items-center justify-center p-8 text-center"><div className="rounded-full bg-slate-100 p-4"><Trash2 className="h-8 w-8 text-slate-500" /></div><h3 className="mt-4 text-2xl font-semibold">{quizMode === "bb_pairs" ? "当前筛选没有词对，试试清空搜索或切换频率" : "Quiz pool is too small"}</h3></CardContent></Card>
                 )}
               </>
             )) : null}

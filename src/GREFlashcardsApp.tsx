@@ -848,36 +848,52 @@ function getWordMeaningFromPool(wordPool, wordText) {
   return matched.shortMeaning || firstSense.zh || firstSense.en || "";
 }
 
-function buildQuizQuestion(wordPool, mode) {
-  const validWords = wordPool.filter((w) => w.senses.some((s) => (mode === "equivalence" ? (s.synonyms || []).length : (s.antonyms || []).length)));
+function buildQuizQuestion(wordPool, mode, verifiedPairs = []) {
+  const normalize = (value) => String(value ?? "").normalize("NFKC").trim().toLowerCase().replace(/\s+/g, " ");
+  const knownPairs = new Map();
+  for (const pair of verifiedPairs) {
+    const a = normalize(pair.a), b = normalize(pair.b);
+    if (!a || !b || a === b) continue;
+    if (!knownPairs.has(a)) knownPairs.set(a, new Set());
+    if (!knownPairs.has(b)) knownPairs.set(b, new Set());
+    knownPairs.get(a).add(b);
+    knownPairs.get(b).add(a);
+  }
+  // Equivalence answers must be attested in the approved BB pairs, not arbitrary synonym fields.
+  const validWords = wordPool.filter((w) => {
+    if (mode === "equivalence") return knownPairs.has(normalize(w.word));
+    return (w.senses || []).some((sense) => (sense.antonyms || []).length > 0);
+  });
   const target = pickRandom(validWords);
   if (!target) return null;
-
-  const targetSense = target.senses.find((s) => (mode === "equivalence" ? (s.synonyms || []).length : (s.antonyms || []).length)) || target.senses[0];
-  const correctPool = mode === "equivalence" ? targetSense.synonyms || [] : targetSense.antonyms || [];
+  const targetKey = normalize(target.word);
+  const targetSense = mode === "equivalence"
+    ? target.senses?.[0] || {}
+    : target.senses.find((sense) => (sense.antonyms || []).length > 0) || {};
+  const correctPool = mode === "equivalence"
+    ? [...(knownPairs.get(targetKey) || [])]
+    : (targetSense.antonyms || []).filter((candidate) => !knownPairs.get(targetKey)?.has(normalize(candidate)));
   const correctAnswer = pickRandom(correctPool);
   if (!correctAnswer) return null;
-
+  const forbidden = new Set([targetKey, normalize(correctAnswer), ...(knownPairs.get(targetKey) || [])]);
   const distractors = uniq(
-    validWords
-      .filter((w) => w.id !== target.id)
-      .flatMap((w) =>
-        w.senses.flatMap((s) => [
-          ...(mode === "equivalence" ? s.synonyms || [] : s.antonyms || []),
-          ...(mode === "equivalence" ? s.antonyms || [] : s.synonyms || []),
-        ])
-      )
-  ).filter((item) => item.toLowerCase() !== correctAnswer.toLowerCase());
-
+    wordPool.flatMap((word) => [
+      word.word,
+      ...(word.senses || []).flatMap((sense) => [...(sense.synonyms || []), ...(sense.antonyms || [])]),
+    ])
+  ).filter((candidate) => candidate && !forbidden.has(normalize(candidate)));
+  if (distractors.length < 3) return null;
   return {
     questionType: mode,
     targetWordId: target.id,
     promptWord: target.word,
-    promptZh: targetSense.zh || "",
+    promptZh: targetSense.zh || target.shortMeaning || "",
     promptEn: targetSense.en || "",
     correctAnswer,
     choices: shuffleArray([correctAnswer, ...shuffleArray(distractors).slice(0, 3)]),
-    explanation: mode === "equivalence" ? `正确项和 ${target.word} 在这个考法下语义最接近。` : `正确项和 ${target.word} 在这个考法下构成反义关系。`,
+    explanation: mode === "equivalence"
+      ? "正确项来自经审核的 BB 六选二标准配对。"
+      : "正确项与目标词构成反义关系。",
     frequency: "",
   };
 }
@@ -2482,7 +2498,7 @@ function showQuizQuestion(resume = false) {
     question = result.question;
     answer = result.round?.answer;
   } else {
-    question = buildQuizQuestion(filteredWords.length ? filteredWords : words, quizMode);
+    question = buildQuizQuestion(filteredWords.length ? filteredWords : words, quizMode, sixChoicePairs);
   }
   const checked = Boolean(answer?.checked);
   const selected = answer?.selectedChoice || "";
